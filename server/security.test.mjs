@@ -25,3 +25,9 @@ test('server secret is never declared as an Expo public variable', async () => {
   assert.doesNotMatch(example, /EXPO_PUBLIC_SUPABASE_SECRET/i);
   assert.match(example, /^SUPABASE_SECRET_KEY=/m);
 });
+
+test('local demo mode is gated behind Expo development builds', async () => {
+  const app = await readFile(new URL('../App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /const localDemoMode = __DEV__ && process\.env\.EXPO_PUBLIC_DEMO_MODE === 'true'/);
+  assert.doesNotMatch(app, /const localDemoMode = process\.env\.EXPO_PUBLIC_DEMO_MODE/);
+});

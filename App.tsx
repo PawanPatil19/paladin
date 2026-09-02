@@ -18,6 +18,18 @@ import { acceptedMovement, elapsedSeconds, formatDuration, freshness } from './s
 import { storage, type Profile } from './src/storage';
 import { authConfigured, currentSession, handleAuthUrl, resetPassword, signIn, signOut, signUp, supabase, updatePassword, type AuthUser } from './src/auth';
 
+// Local previews can exercise the ride flow without weakening production auth.
+// Expo replaces __DEV__ at build time, so production bundles can never enable this path.
+const localDemoMode = __DEV__ && process.env.EXPO_PUBLIC_DEMO_MODE === 'true';
+const localDemoUser: AuthUser = {
+  id: 'local-demo-user',
+  email: 'demo@paladin.local',
+  user_metadata: { display_name: 'Demo Rider' },
+  app_metadata: { provider: 'local' },
+  aud: 'authenticated',
+  created_at: '1970-01-01T00:00:00.000Z',
+};
+
 type Screen = 'boot' | 'configuration' | 'onboarding' | 'auth' | 'passwordReset' | 'home' | 'setup' | 'lobby' | 'active' | 'summary' | 'settings' | 'history';
 type Mode = 'create' | 'join';
 type Destination = ApiGroup['destination'] & { icon: keyof typeof Ionicons.glyphMap };
@@ -153,8 +165,8 @@ export default function App() {
   const restore = async () => {
     const [hasOnboarded, savedProfile, savedSession, savedHistory] = await Promise.all([storage.hasOnboarded(), storage.profile(), storage.session(), storage.history()]);
     setProfile(savedProfile); setHistory(savedHistory);
-    if (!authConfigured || (!__DEV__ && !process.env.EXPO_PUBLIC_API_URL)) return setScreen('configuration');
-    const session = await currentSession(); setAuthUser(session?.user || null);
+    if (!localDemoMode && (!authConfigured || (!__DEV__ && !process.env.EXPO_PUBLIC_API_URL))) return setScreen('configuration');
+    const session = localDemoMode ? { user: localDemoUser } : await currentSession(); setAuthUser(session?.user || null);
     const status = await locationPermissionStatus().catch(() => null);
     if (status) setPermission(status.foreground.status === 'granted' ? (status.background?.status === 'granted' ? 'Always allowed' : 'While using app') : 'Not allowed');
     if (!hasOnboarded) return setScreen('onboarding');
@@ -191,7 +203,7 @@ export default function App() {
   const changeDestination = () => { if (!group) return; const currentIndex = DESTINATIONS.findIndex((item) => item.name === group.destination.name); const next = DESTINATIONS[(currentIndex + 1 + DESTINATIONS.length) % DESTINATIONS.length]; Alert.alert('Change destination?', `Set destination to ${next.name}?`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Change', onPress: async () => { const result = await groupApi.destination(group.code, participantId, next); setGroup(result.group); } }]); };
   if (screen === 'boot') return <View style={[s.fill, s.center]}><Logo /><ActivityIndicator color={C.ink} style={{ marginTop: 24 }} /><Text style={[s.meta, { marginTop: 10 }]}>Restoring Paladin…</Text></View>;
   if (screen === 'configuration') return <ConfigurationScreen />;
-  if (screen === 'onboarding') return <Onboarding onDone={async () => { await storage.completeOnboarding(); setScreen(authUser ? 'home' : 'auth'); }} />;
+  if (screen === 'onboarding') return <Onboarding onDone={async () => { await storage.completeOnboarding(); setScreen(localDemoMode || authUser ? 'home' : 'auth'); }} />;
   if (screen === 'auth') return <AuthScreen onAuthenticated={async (user) => { setAuthUser(user); setScreen('boot'); await restore(); }} />;
   if (screen === 'passwordReset') return <PasswordReset onDone={() => setScreen('home')} />;
   if (screen === 'home') return <><StatusBar style="dark" /><Home profile={profile} active={group?.status === 'active' ? group : null} history={history} onCreate={() => { setMode('create'); setError(''); setScreen('setup'); }} onJoin={() => { setMode('join'); setError(''); setScreen('setup'); }} onResume={() => setScreen('active')} onSettings={() => setScreen('settings')} onHistory={() => setScreen('history')} onOpenRide={(ride) => { setSummary(ride); setScreen('summary'); }} /></>;

@@ -35,7 +35,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "server": "node server/index.mjs",
+    "server": "node --env-file-if-exists=.env server/index.mjs",
     "test:server": "node --test server/*.test.mjs"
   },
   "private": true,
