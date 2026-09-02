@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="assets/icon.png" alt="Paladin app icon" width="160" />
-</p>
-
-<p align="center">
   <img src="assets/cycling-hero.png" alt="A group of cyclists riding together at sunset" width="100%" />
 </p>
 
