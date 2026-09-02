@@ -1,0 +1,31 @@
+labels:
+  - name: feature
+    color: "1D76DB"
+    description: Adds or changes a user-facing capability
+  - name: fix
+    color: "D73A4A"
+    description: Corrects broken or unexpected behavior
+  - name: improvement
+    color: "A2EEEF"
+    description: Refines an existing experience
+  - name: docs
+    color: "0075CA"
+    description: Documentation or project guidance
+  - name: chore
+    color: "6B7280"
+    description: Maintenance, tooling, or dependency work
+  - name: security
+    color: "B60205"
+    description: Security or privacy concern
+  - name: mobile
+    color: "5319E7"
+    description: Mobile app area
+  - name: server
+    color: "0052CC"
+    description: Server or API area
+  - name: data
+    color: "0E8A16"
+    description: Data or persistence area
+  - name: design
+    color: "C5DEF5"
+    description: Product design or visual experience
