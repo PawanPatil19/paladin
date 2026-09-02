@@ -27,11 +27,11 @@ const SG_REGION = {
   longitudeDelta: 0.033,
 };
 
-export function GroupMap({ members, destination, follow = true, fitKey = 0, onGesture }: { members: MapMember[]; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
+export function GroupMap({ members, start, destination, follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
   const mapRef = useRef<MapView>(null);
   const route = useMemo(
-    () => [...members.map(({ latitude, longitude }) => ({ latitude, longitude })), { latitude: destination.latitude, longitude: destination.longitude }],
-    [members, destination],
+    () => [{ latitude: start.latitude, longitude: start.longitude }, ...members.map(({ latitude, longitude }) => ({ latitude, longitude })), { latitude: destination.latitude, longitude: destination.longitude }],
+    [members, start, destination],
   );
 
   useEffect(() => {
@@ -60,6 +60,9 @@ export function GroupMap({ members, destination, follow = true, fitKey = 0, onGe
       onMapReady={() => mapRef.current?.fitToCoordinates(route, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}
     >
       <Polyline coordinates={route} strokeColor="#FF6846" strokeWidth={5} lineDashPattern={[2, 1]} />
+      <Marker coordinate={{ latitude: start.latitude, longitude: start.longitude }} title={`Start: ${start.name}`}>
+        <View style={styles.startMarker}><Text style={styles.startMarkerText}>A</Text></View>
+      </Marker>
       <Marker coordinate={{ latitude: destination.latitude, longitude: destination.longitude }} title={destination.name}>
         <View style={styles.destinationMarker}><Ionicons name="flag" size={18} color="#18352C" /></View>
       </Marker>
@@ -80,4 +83,6 @@ const styles = StyleSheet.create({
   avatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
   destinationMarker: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#D7F26D', borderWidth: 3, borderColor: '#FFFCF6', alignItems: 'center', justifyContent: 'center' },
+  startMarker: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#18352C', borderWidth: 3, borderColor: '#FFFCF6', alignItems: 'center', justifyContent: 'center' },
+  startMarkerText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900' },
 });

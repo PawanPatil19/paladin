@@ -56,11 +56,23 @@ function makeMember(name, deviceId, userId, index, coordinate = {}) {
   };
 }
 
+function cleanPoint(point = {}, fallback = {}) {
+  return {
+    name: cleanText(point.name, 60) || cleanText(fallback.name, 60),
+    area: cleanText(point.area, 80) || cleanText(fallback.area, 80),
+    address: cleanText(point.address, 120) || cleanText(fallback.address, 120),
+    distance: cleanText(point.distance, 16) || cleanText(fallback.distance, 16),
+    latitude: numeric(point.latitude, numeric(fallback.latitude, null)),
+    longitude: numeric(point.longitude, numeric(fallback.longitude, null)),
+  };
+}
+
 function publicGroup(group, since = '') {
   return {
     code: group.code, groupName: group.groupName, rideName: group.rideName,
     activity: group.activity, status: group.status, hostId: group.hostId,
-    destination: group.destination, members: [...group.members.values()].map(({ deviceId: _deviceId, userId: _userId, ...member }) => member),
+    start: group.start || cleanPoint({ name: 'Current location' }), destination: group.destination,
+    members: [...group.members.values()].map(({ deviceId: _deviceId, userId: _userId, ...member }) => member),
     cheers: group.cheers.filter((cheer) => !since || cheer.createdAt > since).slice(-40),
     createdAt: group.createdAt, startedAt: group.startedAt, endedAt: group.endedAt,
     summary: group.summary, serverTime: new Date().toISOString(),
@@ -95,7 +107,7 @@ function buildSummary(group, body = {}) {
   const durationSeconds = Math.max(0, Math.round((Date.parse(endedAt) - startedMs) / 1000));
   const distanceKm = Math.max(0, numeric(body.distanceKm, 0));
   return {
-    code: group.code, rideName: group.rideName, destination: group.destination,
+    code: group.code, rideName: group.rideName, activity: group.activity, start: group.start, destination: group.destination,
     startedAt: group.startedAt, endedAt, durationSeconds, distanceKm,
     averageSpeedKmh: durationSeconds > 0 ? distanceKm / (durationSeconds / 3600) : 0,
     riders: [...group.members.values()].map((member) => ({ id: member.id, name: member.name, initials: member.initials, color: member.color })),
@@ -140,9 +152,11 @@ export function createAppServer() {
         const body = await readBody(request);
         const name = cleanText(body.name, 24);
         const deviceId = cleanText(body.deviceId, 80) || randomUUID();
-        const destinationName = cleanText(body.destination?.name, 60);
+        const start = cleanPoint(body.start, { name: 'Current location', latitude: body.coordinate?.latitude, longitude: body.coordinate?.longitude });
+        const destination = cleanPoint(body.destination);
         if (name.length < 2) return json(response, 400, { code: 'NAME_REQUIRED', error: 'Add your display name first.' });
-        if (!destinationName) return json(response, 400, { code: 'DESTINATION_REQUIRED', error: 'Choose where your group is heading.' });
+        if (!destination.name) return json(response, 400, { code: 'DESTINATION_REQUIRED', error: 'Choose where your group is heading.' });
+        if (start.name === destination.name && start.latitude === destination.latitude && start.longitude === destination.longitude) return json(response, 400, { code: 'ROUTE_REQUIRED', error: 'Choose different start and end points.' });
         const existing = await store.findActiveByIdentity({ userId, deviceId });
         if (existing) {
           const member = [...existing.members.values()].find((item) => userId ? item.userId === userId : item.deviceId === deviceId);
@@ -155,10 +169,7 @@ export function createAppServer() {
         const group = {
           code, groupName: cleanText(body.groupName, 40), rideName: cleanText(body.rideName, 50),
           activity: body.activity === 'run' ? 'run' : 'ride', status: 'lobby', hostId: member.id,
-          destination: {
-            name: destinationName, area: cleanText(body.destination?.area, 80), address: cleanText(body.destination?.address, 120),
-            distance: cleanText(body.destination?.distance, 16), latitude: numeric(body.destination?.latitude, null), longitude: numeric(body.destination?.longitude, null),
-          },
+          start, destination,
           members: new Map([[member.id, member]]), cheers: [], createdAt: now, startedAt: null, endedAt: null, summary: null,
         };
         await store.save(group);
@@ -228,6 +239,20 @@ export function createAppServer() {
           const name = cleanText(body.destination?.name, 60);
           if (!name) return json(response, 400, { code: 'DESTINATION_REQUIRED', error: 'Choose where your group is heading.' });
           group.destination = { ...group.destination, ...body.destination, name };
+          await store.save(group);
+          return json(response, 200, { group: publicGroup(group) });
+        }
+
+        if (request.method === 'PATCH' && parts[2] === 'route') {
+          const body = await readBody(request);
+          if (!requireHost(group, body.participantId, userId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the activity host can change the route.' });
+          if (group.status !== 'lobby') return json(response, 409, { code: 'ACTIVITY_STARTED', error: 'The route is locked after the activity starts.' });
+          const start = cleanPoint(body.start);
+          const destination = cleanPoint(body.destination);
+          if (!start.name || !destination.name) return json(response, 400, { code: 'ROUTE_REQUIRED', error: 'Choose both a start and end point.' });
+          if (start.name === destination.name && start.latitude === destination.latitude && start.longitude === destination.longitude) return json(response, 400, { code: 'ROUTE_REQUIRED', error: 'Choose different start and end points.' });
+          group.start = start;
+          group.destination = destination;
           await store.save(group);
           return json(response, 200, { group: publicGroup(group) });
         }

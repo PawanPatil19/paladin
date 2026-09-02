@@ -66,6 +66,39 @@ test('two phones can share a code, positions, and cheers', async () => {
   assert.equal(snapshot.body.group.cheers[0].message, 'Steady lah!');
 });
 
+test('running and cycling activities persist distinct start and end points', async () => {
+  const created = await call('/groups', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Ari',
+      deviceId: 'runner-phone',
+      activity: 'run',
+      start: { name: 'Sports Hub', area: 'Kallang', latitude: 1.304, longitude: 103.8746 },
+      destination: { name: 'East Coast Park', area: 'Marine Cove', latitude: 1.3018, longitude: 103.9127 },
+    }),
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.group.activity, 'run');
+  assert.equal(created.body.group.start.name, 'Sports Hub');
+  assert.equal(created.body.group.destination.name, 'East Coast Park');
+
+  const changed = await call(`/groups/${created.body.group.code}/route`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      participantId: created.body.participantId,
+      start: { name: 'Sports Hub', area: 'Kallang', latitude: 1.304, longitude: 103.8746 },
+      destination: { name: 'Marina Barrage', area: 'Marina Bay', latitude: 1.2807, longitude: 103.8712 },
+    }),
+  });
+  assert.equal(changed.status, 200);
+  assert.equal(changed.body.group.destination.name, 'Marina Barrage');
+
+  await call(`/groups/${created.body.group.code}/start`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId }) });
+  const ended = await call(`/groups/${created.body.group.code}/end`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, distanceKm: 4.2 }) });
+  assert.equal(ended.body.group.summary.activity, 'run');
+  assert.equal(ended.body.group.summary.start.name, 'Sports Hub');
+});
+
 test('rejects unknown codes and participants', async () => {
   const missing = await call('/groups/ABC123');
   assert.equal(missing.status, 404);

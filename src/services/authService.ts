@@ -1,13 +1,13 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
-import { createClient, type Session, type User } from '@supabase/supabase-js';
+import { createClient, type AuthChangeEvent, type Session, type User } from '@supabase/supabase-js';
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const publishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || '';
 
-export const authConfigured = Boolean(url && publishableKey);
-export const supabase = authConfigured ? createClient(url, publishableKey, {
+const configured = Boolean(url && publishableKey);
+const supabase = configured ? createClient(url, publishableKey, {
   auth: {
     ...(Platform.OS !== 'web' ? { storage: AsyncStorage } : {}),
     autoRefreshToken: true,
@@ -23,36 +23,36 @@ if (supabase && Platform.OS !== 'web') {
   });
 }
 
-export async function currentSession(): Promise<Session | null> {
+async function currentSession(): Promise<Session | null> {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
   return data.session;
 }
 
-export async function accessToken() { return (await currentSession())?.access_token || ''; }
+async function accessToken() { return (await currentSession())?.access_token || ''; }
 
-export async function signIn(email: string, password: string) {
+async function signIn(email: string, password: string) {
   if (!supabase) throw new Error('Public authentication is not configured.');
   const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
   if (error) throw error;
   return data;
 }
 
-export async function signUp(email: string, password: string, displayName: string) {
+async function signUp(email: string, password: string, displayName: string) {
   if (!supabase) throw new Error('Public authentication is not configured.');
   const { data, error } = await supabase.auth.signUp({ email: email.trim().toLowerCase(), password, options: { data: { display_name: displayName.trim() } } });
   if (error) throw error;
   return data;
 }
 
-export async function resetPassword(email: string) {
+async function resetPassword(email: string) {
   if (!supabase) throw new Error('Public authentication is not configured.');
   const redirectTo = process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL || 'paladin://reset-password';
   const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
   if (error) throw error;
 }
 
-export async function handleAuthUrl(url: string) {
+async function handleAuthUrl(url: string) {
   if (!supabase) return false;
   const parsed = new URL(url);
   const code = parsed.searchParams.get('code');
@@ -77,11 +77,31 @@ export async function handleAuthUrl(url: string) {
   return false;
 }
 
-export async function updatePassword(password: string) {
+async function updatePassword(password: string) {
   if (!supabase) throw new Error('Public authentication is not configured.');
   const { error } = await supabase.auth.updateUser({ password });
   if (error) throw error;
 }
 
-export async function signOut() { if (supabase) await supabase.auth.signOut(); }
+async function signOut() { if (supabase) await supabase.auth.signOut(); }
+
+function onAuthStateChange(listener: (event: AuthChangeEvent, session: Session | null) => void) {
+  if (!supabase) return () => undefined;
+  const { data } = supabase.auth.onAuthStateChange(listener);
+  return () => data.subscription.unsubscribe();
+}
+
+export const authService = {
+  configured,
+  currentSession,
+  accessToken,
+  signIn,
+  signUp,
+  resetPassword,
+  handleAuthUrl,
+  updatePassword,
+  signOut,
+  onAuthStateChange,
+};
+
 export type AuthUser = User;

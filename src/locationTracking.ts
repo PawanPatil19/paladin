@@ -1,7 +1,8 @@
 import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { groupApi } from './api';
+import { activityService } from './services/activityService';
+import { primaryMetricText } from './domain/activity';
 import { acceptedMovement } from './rideUtils';
 import { storage } from './storage';
 
@@ -19,7 +20,7 @@ if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(LOCATION_TASK)) {
     const moved = stats.lastCoordinate ? acceptedMovement(stats.lastCoordinate, next, latest.coords.accuracy) : 0;
     const speedKmh = Math.max(0, (latest.coords.speed || 0) * 3.6);
     await storage.saveRideStats({ ...stats, distanceKm: stats.distanceKm + moved, maxSpeedKmh: Math.max(stats.maxSpeedKmh, speedKmh), lastCoordinate: next });
-    await groupApi.updateLocation(session.code, session.participantId, { latitude: next.latitude, longitude: next.longitude, accuracy: latest.coords.accuracy }, `${speedKmh.toFixed(1)} km/h`, latest.coords.speed || 0).catch(() => undefined);
+    await activityService.updateLocation(session.code, session.participantId, { latitude: next.latitude, longitude: next.longitude, accuracy: latest.coords.accuracy }, primaryMetricText(session.group?.activity || 'ride', speedKmh, 'metric'), latest.coords.speed || 0).catch(() => undefined);
   });
 }
 
@@ -45,7 +46,7 @@ export async function startBackgroundTracking() {
     await Location.startLocationUpdatesAsync(LOCATION_TASK, {
       accuracy: Location.Accuracy.High, distanceInterval: 10, timeInterval: 5000,
       pausesUpdatesAutomatically: false, showsBackgroundLocationIndicator: true,
-      foregroundService: { notificationTitle: 'Paladin ride active', notificationBody: 'Sharing your live location with your ride group.', notificationColor: '#18352C' },
+      foregroundService: { notificationTitle: 'Paladin activity active', notificationBody: 'Sharing your live location with your group.', notificationColor: '#18352C' },
     });
   }
   return true;

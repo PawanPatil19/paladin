@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { ApiGroup, RideSummary } from './api';
+import type { ActivitySummary, ApiGroup } from './services/activityService';
 
 const KEYS = {
   onboarding: 'paladin:onboarding:v1', profile: 'paladin:profile:v1', session: 'paladin:session:v1',
@@ -29,8 +29,8 @@ export const storage = {
   session: () => getJson<StoredSession | null>(KEYS.session, null),
   saveSession: (session: StoredSession) => setJson(KEYS.session, session),
   clearSession: () => AsyncStorage.removeItem(KEYS.session),
-  history: () => getJson<RideSummary[]>(KEYS.history, []),
-  async addHistory(summary: RideSummary) {
+  history: () => getJson<ActivitySummary[]>(KEYS.history, []),
+  async addHistory(summary: ActivitySummary) {
     const history = await storage.history();
     await setJson(KEYS.history, [summary, ...history.filter((item) => item.code !== summary.code)].slice(0, 25));
   },
