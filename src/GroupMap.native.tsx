@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from './ui/theme';
 
 type MapMember = {
   id: string;
@@ -59,12 +60,12 @@ export function GroupMap({ members, start, destination, follow = true, fitKey = 
       onPanDrag={onGesture}
       onMapReady={() => mapRef.current?.fitToCoordinates(route, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}
     >
-      <Polyline coordinates={route} strokeColor="#FF6846" strokeWidth={5} lineDashPattern={[2, 1]} />
+      <Polyline coordinates={route} strokeColor={colors.accent} strokeWidth={5} lineDashPattern={[2, 1]} />
       <Marker coordinate={{ latitude: start.latitude, longitude: start.longitude }} title={`Start: ${start.name}`}>
         <View style={styles.startMarker}><Text style={styles.startMarkerText}>A</Text></View>
       </Marker>
       <Marker coordinate={{ latitude: destination.latitude, longitude: destination.longitude }} title={destination.name}>
-        <View style={styles.destinationMarker}><Ionicons name="flag" size={18} color="#18352C" /></View>
+        <View style={styles.destinationMarker}><Ionicons name="flag" size={18} color={colors.ink} /></View>
       </Marker>
       {members.map((member) => (
         <Marker key={member.id} coordinate={{ latitude: member.latitude, longitude: member.longitude }} title={member.name} description={member.isYou ? 'You' : `${member.pace} pace`}>
@@ -78,11 +79,11 @@ export function GroupMap({ members, start, destination, follow = true, fitKey = 
 }
 
 const styles = StyleSheet.create({
-  avatarRing: { borderRadius: 24, borderWidth: 3, borderColor: '#FFFCF6', shadowColor: '#18352C', shadowOpacity: 0.22, shadowRadius: 4, elevation: 5 },
-  avatarRingYou: { borderColor: '#D7F26D', borderWidth: 4 },
+  avatarRing: { borderRadius: 24, borderWidth: 3, borderColor: colors.paper, shadowColor: colors.ink, shadowOpacity: 0.22, shadowRadius: 4, elevation: 5 },
+  avatarRingYou: { borderColor: colors.lime, borderWidth: 4 },
   avatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
-  destinationMarker: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#D7F26D', borderWidth: 3, borderColor: '#FFFCF6', alignItems: 'center', justifyContent: 'center' },
-  startMarker: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#18352C', borderWidth: 3, borderColor: '#FFFCF6', alignItems: 'center', justifyContent: 'center' },
-  startMarkerText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900' },
+  avatarText: { color: colors.white, fontSize: 13, fontWeight: '900' },
+  destinationMarker: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.lime, borderWidth: 3, borderColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
+  startMarker: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.ink, borderWidth: 3, borderColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
+  startMarkerText: { color: colors.white, fontSize: 11, fontWeight: '900' },
 });

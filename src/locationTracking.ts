@@ -46,7 +46,7 @@ export async function startBackgroundTracking() {
     await Location.startLocationUpdatesAsync(LOCATION_TASK, {
       accuracy: Location.Accuracy.High, distanceInterval: 10, timeInterval: 5000,
       pausesUpdatesAutomatically: false, showsBackgroundLocationIndicator: true,
-      foregroundService: { notificationTitle: 'Paladin activity active', notificationBody: 'Sharing your live location with your group.', notificationColor: '#18352C' },
+      foregroundService: { notificationTitle: 'Paladin activity active', notificationBody: 'Sharing your live location with your group.', notificationColor: '#123524' },
     });
   }
   return true;

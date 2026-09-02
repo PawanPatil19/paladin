@@ -28,7 +28,7 @@ export function Button({ label, onPress, secondary, danger, disabled, icon }: Bu
 }
 
 const styles = StyleSheet.create({
-  button: { minHeight: 58, borderRadius: 29, backgroundColor: colors.orange, paddingHorizontal: 22, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center' },
+  button: { minHeight: 58, borderRadius: 29, backgroundColor: colors.accent, paddingHorizontal: 22, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center' },
   secondary: { backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.line },
   danger: { backgroundColor: colors.red },
   disabled: { opacity: 0.45 },
