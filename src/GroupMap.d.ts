@@ -7,6 +7,9 @@ type MapMember = {
   latitude: number;
   longitude: number;
   isYou?: boolean;
+  visibility?: 'paused' | 'approximate' | 'precise';
+  locationState?: 'paused' | 'stale' | 'delayed' | 'live';
+  signal?: 'together' | 'ease' | 'break' | 'help';
 };
 
 type MapDestination = {

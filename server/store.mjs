@@ -20,7 +20,7 @@ class MemoryStore {
     return [...this.groups.values()].find((group) => group.status !== 'ended' && [...group.members.values()].some((member) => userId ? member.userId === userId : member.deviceId === deviceId)) || null;
   }
   async history(userId) {
-    return [...this.groups.values()].filter((group) => group.status === 'ended' && group.summary && [...group.members.values()].some((member) => member.userId === userId)).map((group) => group.summary).sort((a, b) => b.endedAt.localeCompare(a.endedAt));
+    return [...this.groups.values()].filter((group) => group.status === 'ended' && group.summary && [...group.members.values()].some((member) => member.userId === userId)).map((group) => ({ ...group.summary, viewerParticipantId: [...group.members.values()].find((member) => member.userId === userId)?.id })).sort((a, b) => b.endedAt.localeCompare(a.endedAt));
   }
   async profile() { return null; }
   async saveProfile(_userId, profile) { return profile; }
@@ -67,9 +67,9 @@ class SupabaseStore {
     return data?.code ? this.get(data.code) : null;
   }
   async history(userId) {
-    const { data, error } = await this.admin.from('paladin_memberships').select('summary').eq('user_id', userId).eq('active', false).not('summary', 'is', null).order('updated_at', { ascending: false }).limit(50);
+    const { data, error } = await this.admin.from('paladin_memberships').select('summary,participant_id').eq('user_id', userId).eq('active', false).not('summary', 'is', null).order('updated_at', { ascending: false }).limit(50);
     if (error) throw error;
-    return (data || []).map((row) => row.summary);
+    return (data || []).map((row) => ({ ...row.summary, viewerParticipantId: row.participant_id }));
   }
   async profile(userId) {
     const { data, error } = await this.admin.from('paladin_profiles').select('display_name,voice_enabled,units').eq('id', userId).maybeSingle();

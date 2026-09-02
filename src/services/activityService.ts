@@ -7,6 +7,8 @@ export type ApiMember = {
   id: string; name: string; initials: string; color: string; pace: string;
   latitude: number | null; longitude: number | null; accuracy: number | null; speed: number;
   joinedAt: string; lastSeen: string; locationUpdatedAt: string | null;
+  visibility: 'paused' | 'approximate' | 'precise'; locationState: 'paused' | 'stale' | 'delayed' | 'live';
+  consentAt: string | null; signal: 'together' | 'ease' | 'break' | 'help'; signalUpdatedAt: string;
 };
 export type ApiCheer = { id: string; senderId: string; senderName: string; message: string; createdAt: string };
 export type ApiPoint = { name: string; area: string; address?: string; distance?: string; latitude: number | null; longitude: number | null };
@@ -14,12 +16,13 @@ export type ActivitySummary = {
   code: string; rideName: string; activity?: ActivityKind; start?: ApiPoint; destination: ApiPoint; startedAt: string | null; endedAt: string;
   durationSeconds: number; distanceKm: number; averageSpeedKmh: number;
   riders: { id: string; name: string; initials: string; color: string }[];
+  connections?: string[]; viewerParticipantId?: string;
 };
 export type ApiGroup = {
   code: string; groupName: string; rideName: string; activity: ActivityKind; status: 'lobby' | 'active' | 'ended'; hostId: string;
   start: ApiPoint; destination: ApiPoint;
   members: ApiMember[]; cheers: ApiCheer[]; createdAt: string; startedAt: string | null; endedAt: string | null;
-  summary: ActivitySummary | null; serverTime: string;
+  summary: ActivitySummary | null; serverTime: string; connections: string[];
 };
 
 export class ApiError extends Error {
@@ -72,11 +75,20 @@ export const activityService = {
   updateLocation(code: string, participantId: string, coordinate: ApiCoordinate, pace: string, speed = 0) {
     return request<{ member: ApiMember }>(`/groups/${code}/participants/${participantId}`, { method: 'PATCH', body: JSON.stringify({ ...coordinate, pace, speed }) });
   },
+  presence(code: string, participantId: string, update: { visibility?: ApiMember['visibility']; signal?: ApiMember['signal'] }) {
+    return request<{ member: ApiMember }>(`/groups/${code}/participants/${participantId}`, { method: 'PATCH', body: JSON.stringify(update) });
+  },
   heartbeat(code: string, participantId: string) {
     return request<{ ok: true; serverTime: string }>(`/groups/${code}/heartbeat`, { method: 'POST', body: JSON.stringify({ participantId }) });
   },
   cheer(code: string, senderId: string, message: string) {
     return request<{ cheer: ApiCheer }>(`/groups/${code}/cheers`, { method: 'POST', body: JSON.stringify({ senderId, message }) });
+  },
+  safety(code: string, participantId: string, targetId: string, action: 'block' | 'report', category = 'safety') {
+    return request<{ group: ApiGroup }>(`/groups/${code}/safety`, { method: 'POST', body: JSON.stringify({ participantId, targetId, action, category }) });
+  },
+  connect(code: string, participantId: string, targetId: string) {
+    return request<{ matched: boolean; group: ApiGroup }>(`/groups/${code}/connect`, { method: 'POST', body: JSON.stringify({ participantId, targetId }) });
   },
   leave(code: string, participantId: string, targetId = participantId) {
     return request<{ group: ApiGroup }>(`/groups/${code}/participants/${targetId}`, { method: 'DELETE', body: JSON.stringify({ participantId }) });

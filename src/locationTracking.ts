@@ -14,7 +14,7 @@ if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(LOCATION_TASK)) {
     const locations = (data as { locations: Location.LocationObject[] }).locations;
     const latest = locations.at(-1);
     const session = await storage.session();
-    if (!latest || !session) return;
+    if (!latest || !session || session.sharingEnabled === false) return;
     const stats = await storage.rideStats(session.code);
     const next = { latitude: latest.coords.latitude, longitude: latest.coords.longitude, timestamp: latest.timestamp };
     const moved = stats.lastCoordinate ? acceptedMovement(stats.lastCoordinate, next, latest.coords.accuracy) : 0;

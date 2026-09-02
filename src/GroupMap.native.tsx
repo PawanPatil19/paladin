@@ -13,6 +13,9 @@ type MapMember = {
   latitude: number;
   longitude: number;
   isYou?: boolean;
+  visibility?: 'paused' | 'approximate' | 'precise';
+  locationState?: 'paused' | 'stale' | 'delayed' | 'live';
+  signal?: 'together' | 'ease' | 'break' | 'help';
 };
 
 type MapDestination = {
@@ -78,8 +81,9 @@ export function GroupMap({ members, start, destination, follow = true, fitKey = 
       </Marker>
       {members.map((member) => (
         <Marker key={member.id} coordinate={{ latitude: member.latitude, longitude: member.longitude }} title={member.name} description={member.isYou ? 'You' : `${member.pace} pace`}>
-          <View style={[styles.avatarRing, member.isYou && styles.avatarRingYou]}>
+          <View style={[styles.avatarRing, member.isYou && styles.avatarRingYou, member.visibility === 'approximate' && styles.avatarRingApproximate, member.locationState === 'delayed' && styles.avatarDelayed]}>
             <View style={[styles.avatar, { backgroundColor: member.color }]}><Text style={styles.avatarText}>{member.initials}</Text></View>
+            <View style={styles.signal}><Text style={styles.signalText}>{member.signal === 'help' ? '!' : member.signal === 'break' ? '‖' : member.signal === 'ease' ? '↓' : '✓'}</Text></View>
           </View>
         </Marker>
       ))}
@@ -90,8 +94,10 @@ export function GroupMap({ members, start, destination, follow = true, fitKey = 
 const styles = StyleSheet.create({
   avatarRing: { borderRadius: 24, borderWidth: 3, borderColor: colors.paper, shadowColor: colors.ink, shadowOpacity: 0.22, shadowRadius: 4, elevation: 5 },
   avatarRingYou: { borderColor: colors.lime, borderWidth: 4 },
+  avatarRingApproximate: { borderColor: 'rgba(18,53,36,0.15)', borderWidth: 7 }, avatarDelayed: { opacity: 0.58 },
   avatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: colors.white, fontSize: 13, fontWeight: '900' },
+  signal: { position: 'absolute', right: -5, bottom: -2, width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: colors.paper, backgroundColor: colors.lime, alignItems: 'center', justifyContent: 'center' }, signalText: { color: colors.ink, fontSize: 9, fontWeight: '900' },
   destinationMarker: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.lime, borderWidth: 3, borderColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
   startMarker: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.ink, borderWidth: 3, borderColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
   startMarkerText: { color: colors.white, fontSize: 11, fontWeight: '900' },

@@ -2,6 +2,10 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { createGroupStore } from './store.mjs';
+import {
+  ALLOWED_CHEERS, CHEER_COOLDOWN_MS, activeConnectionIntents, identityKey,
+  isBlocked, pairKey, publicMember, updatePresence,
+} from './groupPolicy.mjs';
 
 const COLORS = ['#FF6846', '#7CA8F8', '#C889E8', '#F5A45D', '#48A984', '#E16C9A'];
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -50,9 +54,8 @@ function makeMember(name, deviceId, userId, index, coordinate = {}) {
   const now = new Date().toISOString();
   return {
     id: randomUUID(), deviceId, userId, name, initials: name.slice(0, 2).toUpperCase(),
-    color: COLORS[index % COLORS.length], pace: 'Ready',
-    latitude: numeric(coordinate.latitude, null), longitude: numeric(coordinate.longitude, null),
-    accuracy: numeric(coordinate.accuracy, null), speed: 0, joinedAt: now, lastSeen: now, locationUpdatedAt: coordinate.latitude != null ? now : null,
+    color: COLORS[index % COLORS.length], pace: 'Ready', visibility: 'paused', consentAt: null, signal: 'together', signalUpdatedAt: now,
+    latitude: null, longitude: null, accuracy: null, speed: 0, joinedAt: now, lastSeen: now, locationUpdatedAt: null,
   };
 }
 
@@ -67,13 +70,15 @@ function cleanPoint(point = {}, fallback = {}) {
   };
 }
 
-function publicGroup(group, since = '') {
+function publicGroup(group, since = '', viewerId = '') {
+  const visibleMembers = [...group.members.values()].filter((member) => !viewerId || member.id === viewerId || !isBlocked(group, viewerId, member.id));
   return {
     code: group.code, groupName: group.groupName, rideName: group.rideName,
     activity: group.activity, status: group.status, hostId: group.hostId,
     start: group.start || cleanPoint({ name: 'Current location' }), destination: group.destination,
-    members: [...group.members.values()].map(({ deviceId: _deviceId, userId: _userId, ...member }) => member),
-    cheers: group.cheers.filter((cheer) => !since || cheer.createdAt > since).slice(-40),
+    members: visibleMembers.map((member) => publicMember(member)),
+    cheers: group.cheers.filter((cheer) => (!viewerId || !isBlocked(group, viewerId, cheer.senderId)) && (!since || cheer.createdAt > since)).slice(-40),
+    connections: group.connections || [],
     createdAt: group.createdAt, startedAt: group.startedAt, endedAt: group.endedAt,
     summary: group.summary, serverTime: new Date().toISOString(),
   };
@@ -105,13 +110,19 @@ function buildSummary(group, body = {}) {
   const endedAt = new Date().toISOString();
   const startedMs = Date.parse(group.startedAt || group.createdAt);
   const durationSeconds = Math.max(0, Math.round((Date.parse(endedAt) - startedMs) / 1000));
-  const distanceKm = Math.max(0, numeric(body.distanceKm, 0));
+  const maximumPlausibleDistance = group.activity === 'run' ? 200 : 500;
+  const distanceKm = Math.max(0, Math.min(maximumPlausibleDistance, numeric(body.distanceKm, 0)));
   return {
     code: group.code, rideName: group.rideName, activity: group.activity, start: group.start, destination: group.destination,
     startedAt: group.startedAt, endedAt, durationSeconds, distanceKm,
     averageSpeedKmh: durationSeconds > 0 ? distanceKm / (durationSeconds / 3600) : 0,
     riders: [...group.members.values()].map((member) => ({ id: member.id, name: member.name, initials: member.initials, color: member.color })),
+    connections: group.connections || [],
   };
+}
+
+function viewerFor(group, userId, participantId = '') {
+  return [...group.members.values()].find((member) => userId ? member.userId === userId : member.id === participantId)?.id || '';
 }
 
 export function createAppServer() {
@@ -135,7 +146,7 @@ export function createAppServer() {
       if (request.method === 'GET' && url.pathname === '/active') {
         const active = await store.findActiveByIdentity({ userId, deviceId: '' });
         const member = active ? [...active.members.values()].find((item) => item.userId === userId) : null;
-        return json(response, 200, { group: active ? publicGroup(active) : null, participantId: member?.id || null });
+        return json(response, 200, { group: active ? publicGroup(active, '', member?.id) : null, participantId: member?.id || null });
       }
       if (request.method === 'GET' && url.pathname === '/me') {
         const profile = await store.profile(userId);
@@ -160,7 +171,7 @@ export function createAppServer() {
         const existing = await store.findActiveByIdentity({ userId, deviceId });
         if (existing) {
           const member = [...existing.members.values()].find((item) => userId ? item.userId === userId : item.deviceId === deviceId);
-          return json(response, 200, { group: publicGroup(existing), participantId: member.id, resumed: true });
+          return json(response, 200, { group: publicGroup(existing, '', member.id), participantId: member.id, resumed: true });
         }
 
         const code = await makeCode();
@@ -170,10 +181,11 @@ export function createAppServer() {
           code, groupName: cleanText(body.groupName, 40), rideName: cleanText(body.rideName, 50),
           activity: body.activity === 'run' ? 'run' : 'ride', status: 'lobby', hostId: member.id,
           start, destination,
-          members: new Map([[member.id, member]]), cheers: [], createdAt: now, startedAt: null, endedAt: null, summary: null,
+          members: new Map([[member.id, member]]), cheers: [], blocks: [], reports: [], bannedIdentities: [],
+          connectionIntents: [], connections: [], createdAt: now, startedAt: null, endedAt: null, summary: null,
         };
         await store.save(group);
-        return json(response, 201, { group: publicGroup(group), participantId: member.id });
+        return json(response, 201, { group: publicGroup(group, '', member.id), participantId: member.id });
       }
 
       if (parts[0] === 'groups' && parts[1]) {
@@ -182,8 +194,9 @@ export function createAppServer() {
         if (!group) return json(response, 404, { code: 'GROUP_NOT_FOUND', error: 'That ride could not be found. Check the code and try again.' });
 
         if (request.method === 'GET' && parts.length === 2) {
-          if (store.requiresAuth && ![...group.members.values()].some((member) => member.userId === userId)) return json(response, 403, { code: 'NOT_A_MEMBER', error: 'You are not a member of this ride.' });
-          return json(response, 200, { group: publicGroup(group, url.searchParams.get('since') ?? '') });
+          const viewerId = viewerFor(group, userId);
+          if (store.requiresAuth && !viewerId) return json(response, 403, { code: 'NOT_A_MEMBER', error: 'You are not part of this activity.' });
+          return json(response, 200, { group: publicGroup(group, url.searchParams.get('since') ?? '', viewerId) });
         }
 
         if (request.method === 'POST' && parts[2] === 'join') {
@@ -192,6 +205,7 @@ export function createAppServer() {
           if (group.status === 'active') return json(response, 409, { code: 'RIDE_STARTED', error: 'This ride has already started and cannot currently be joined.' });
           const name = cleanText(body.name, 24);
           const deviceId = cleanText(body.deviceId, 80) || randomUUID();
+          if ((group.bannedIdentities || []).includes(userId ? `user:${userId}` : `device:${deviceId}`)) return json(response, 403, { code: 'REMOVED_FROM_GROUP', error: 'The host removed you from this activity.' });
           if (name.length < 2) return json(response, 400, { code: 'NAME_REQUIRED', error: 'Add your display name first.' });
           const otherActive = await store.findActiveByIdentity({ userId, deviceId });
           if (otherActive && otherActive.code !== group.code) return json(response, 409, { code: 'ACTIVE_RIDE_EXISTS', error: 'You already belong to another active ride. Leave or finish it before joining this one.' });
@@ -199,7 +213,7 @@ export function createAppServer() {
           if (existing) {
             existing.deviceId = deviceId; existing.name = name; existing.initials = name.slice(0, 2).toUpperCase(); existing.lastSeen = new Date().toISOString();
             await store.save(group);
-            return json(response, 200, { group: publicGroup(group), participantId: existing.id, resumed: true });
+            return json(response, 200, { group: publicGroup(group, '', existing.id), participantId: existing.id, resumed: true });
           }
           if ([...group.members.values()].some((member) => member.name.toLowerCase() === name.toLowerCase())) {
             return json(response, 409, { code: 'NAME_IN_USE', error: 'That display name is already in this ride. Add an initial so riders can tell you apart.' });
@@ -208,7 +222,7 @@ export function createAppServer() {
           const member = makeMember(name, deviceId, userId, group.members.size, body.coordinate);
           group.members.set(member.id, member);
           await store.save(group);
-          return json(response, 201, { group: publicGroup(group), participantId: member.id });
+          return json(response, 201, { group: publicGroup(group, '', member.id), participantId: member.id });
         }
 
         if (request.method === 'POST' && parts[2] === 'resume') {
@@ -216,10 +230,11 @@ export function createAppServer() {
           const deviceId = cleanText(body.deviceId, 80);
           const member = [...group.members.values()].find((item) => userId ? item.userId === userId : item.deviceId === deviceId);
           if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your previous membership is no longer active.' });
+          if ((group.bannedIdentities || []).includes(identityKey(member))) return json(response, 403, { code: 'REMOVED_FROM_GROUP', error: 'The host removed you from this activity.' });
           member.deviceId = deviceId;
           member.lastSeen = new Date().toISOString();
           await store.save(group);
-          return json(response, 200, { group: publicGroup(group), participantId: member.id });
+          return json(response, 200, { group: publicGroup(group, '', member.id), participantId: member.id });
         }
 
         if (request.method === 'POST' && parts[2] === 'start') {
@@ -229,7 +244,7 @@ export function createAppServer() {
           group.status = 'active';
           group.startedAt ??= new Date().toISOString();
           await store.save(group);
-          return json(response, 200, { group: publicGroup(group) });
+          return json(response, 200, { group: publicGroup(group, '', body.participantId) });
         }
 
         if (request.method === 'PATCH' && parts[2] === 'destination') {
@@ -240,7 +255,7 @@ export function createAppServer() {
           if (!name) return json(response, 400, { code: 'DESTINATION_REQUIRED', error: 'Choose where your group is heading.' });
           group.destination = { ...group.destination, ...body.destination, name };
           await store.save(group);
-          return json(response, 200, { group: publicGroup(group) });
+          return json(response, 200, { group: publicGroup(group, '', body.participantId) });
         }
 
         if (request.method === 'PATCH' && parts[2] === 'route') {
@@ -254,21 +269,19 @@ export function createAppServer() {
           group.start = start;
           group.destination = destination;
           await store.save(group);
-          return json(response, 200, { group: publicGroup(group) });
+          return json(response, 200, { group: publicGroup(group, '', body.participantId) });
         }
 
         if (request.method === 'PATCH' && parts[2] === 'participants' && parts[3]) {
           const participantId = cleanText(parts[3], 64);
           const member = requireMember(group, participantId, userId);
-          if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your ride membership could not be found.' });
+          if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your activity membership could not be found.' });
           const body = await readBody(request);
-          member.latitude = numeric(body.latitude, member.latitude); member.longitude = numeric(body.longitude, member.longitude);
-          member.accuracy = numeric(body.accuracy, member.accuracy); member.speed = Math.max(0, Math.min(25, numeric(body.speed, member.speed)));
-          member.pace = cleanText(body.pace, 20) || member.pace; member.lastSeen = new Date().toISOString();
-          member.locationUpdatedAt = member.lastSeen;
+          const updated = updatePresence(member, body, group.status);
+          if (updated.error) return json(response, 400, { code: updated.error[0], error: updated.error[1] });
+          member.lastSeen = new Date().toISOString();
           await store.patchMember(group.code, member);
-          const { deviceId: _deviceId, userId: _userId, ...publicMember } = member;
-          return json(response, 200, { member: publicMember });
+          return json(response, 200, { member: publicMember(member) });
         }
 
         if (request.method === 'POST' && parts[2] === 'heartbeat') {
@@ -286,12 +299,50 @@ export function createAppServer() {
           const sender = requireMember(group, body.senderId, userId);
           if (!sender) return json(response, 403, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Rejoin the ride to send a cheer.' });
           const message = cleanText(body.message, 100);
-          if (!message) return json(response, 400, { code: 'CHEER_REQUIRED', error: 'Choose a cheer first.' });
+          if (!ALLOWED_CHEERS.has(message)) return json(response, 400, { code: 'CHEER_NOT_ALLOWED', error: 'Choose one of Paladin\'s quick cheers.' });
+          const now = Date.now();
+          if (sender.lastCheerAt && now - Date.parse(sender.lastCheerAt) < CHEER_COOLDOWN_MS) return json(response, 429, { code: 'CHEER_COOLDOWN', error: 'Give the group a moment before sending another cheer.' });
+          sender.lastCheerAt = new Date(now).toISOString();
           const cheer = { id: randomUUID(), senderId: sender.id, senderName: sender.name, message, createdAt: new Date().toISOString() };
           group.cheers.push(cheer);
           if (group.cheers.length > 100) group.cheers.splice(0, group.cheers.length - 100);
-          await store.appendCheer(group.code, cheer);
+          await store.save(group);
           return json(response, 201, { cheer });
+        }
+
+        if (request.method === 'POST' && parts[2] === 'safety') {
+          const body = await readBody(request);
+          const actor = requireMember(group, body.participantId, userId);
+          const target = group.members.get(cleanText(body.targetId, 64));
+          if (!actor || !target || actor.id === target.id) return json(response, 400, { code: 'INVALID_SAFETY_ACTION', error: 'Choose another participant.' });
+          const action = body.action === 'report' ? 'report' : body.action === 'block' ? 'block' : '';
+          if (!action) return json(response, 400, { code: 'INVALID_SAFETY_ACTION', error: 'Choose block or report.' });
+          group.blocks ||= [];
+          if (!isBlocked(group, actor.id, target.id)) group.blocks.push({ blockerId: actor.id, targetId: target.id, createdAt: new Date().toISOString() });
+          if (action === 'report') {
+            group.reports ||= [];
+            group.reports.push({ id: randomUUID(), reporterId: actor.id, targetId: target.id, category: cleanText(body.category, 30) || 'safety', createdAt: new Date().toISOString(), cheerIds: group.cheers.filter((cheer) => cheer.senderId === target.id).slice(-5).map((cheer) => cheer.id) });
+          }
+          await store.save(group);
+          return json(response, 200, { group: publicGroup(group, '', actor.id) });
+        }
+
+        if (request.method === 'POST' && parts[2] === 'connect') {
+          const body = await readBody(request);
+          const actor = requireMember(group, body.participantId, userId);
+          const target = group.members.get(cleanText(body.targetId, 64));
+          if (group.status !== 'ended') return json(response, 409, { code: 'ACTIVITY_NOT_FINISHED', error: 'Reconnect after the activity finishes.' });
+          if (!actor || !target || actor.id === target.id) return json(response, 400, { code: 'INVALID_CONNECTION', error: 'Choose someone from this activity.' });
+          if (isBlocked(group, actor.id, target.id)) return json(response, 403, { code: 'CONNECTION_BLOCKED', error: 'This connection is not available.' });
+          group.connectionIntents = activeConnectionIntents(group);
+          if (!group.connectionIntents.some((intent) => intent.from === actor.id && intent.to === target.id)) group.connectionIntents.push({ from: actor.id, to: target.id, createdAt: new Date().toISOString() });
+          const matched = group.connectionIntents.some((intent) => intent.from === target.id && intent.to === actor.id);
+          group.connections ||= [];
+          const key = pairKey(actor.id, target.id);
+          if (matched && !group.connections.includes(key)) group.connections.push(key);
+          if (group.summary) group.summary.connections = group.connections;
+          await store.save(group);
+          return json(response, 200, { matched, group: publicGroup(group, '', actor.id) });
         }
 
         if (request.method === 'DELETE' && parts[2] === 'participants' && parts[3]) {
@@ -299,7 +350,14 @@ export function createAppServer() {
           const targetId = cleanText(parts[3], 64);
           const actorId = cleanText(body.participantId, 64);
           if (!requireMember(group, actorId, userId) || (actorId !== targetId && !requireHost(group, actorId, userId))) return json(response, 403, { code: 'NOT_ALLOWED', error: 'You cannot remove this rider.' });
-          if (!group.members.has(targetId)) return json(response, 200, { group: publicGroup(group) });
+          if (!group.members.has(targetId)) return json(response, 200, { group: publicGroup(group, '', actorId) });
+          const removed = group.members.get(targetId);
+          if (actorId !== targetId && removed) {
+            group.bannedIdentities ||= [];
+            const key = identityKey(removed);
+            if (!group.bannedIdentities.includes(key)) group.bannedIdentities.push(key);
+          }
+          if (removed) updatePresence(removed, { visibility: 'paused' }, group.status);
           group.members.delete(targetId);
           if (group.members.size === 0) {
             group.status = 'ended'; group.endedAt = new Date().toISOString(); group.summary = buildSummary(group);
@@ -307,7 +365,7 @@ export function createAppServer() {
             group.hostId = [...group.members.values()].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0].id;
           }
           await store.save(group);
-          return json(response, 200, { group: publicGroup(group) });
+          return json(response, 200, { group: publicGroup(group, '', actorId) });
         }
 
         if (request.method === 'POST' && parts[2] === 'end') {
@@ -321,7 +379,7 @@ export function createAppServer() {
             }
           }
           await store.save(group);
-          return json(response, 200, { group: publicGroup(group) });
+          return json(response, 200, { group: publicGroup(group, '', body.participantId) });
         }
       }
 

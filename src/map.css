@@ -61,6 +61,30 @@
   outline: 3px solid #c7efcf;
 }
 
+.paladin-member-approximate .paladin-member-avatar {
+  outline: 8px solid rgb(18 53 36 / 10%);
+}
+
+.paladin-member-delayed {
+  opacity: 0.58;
+}
+
+.paladin-member-signal {
+  position: absolute;
+  right: -3px;
+  bottom: 10px;
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border: 2px solid #f7fbf8;
+  border-radius: 50%;
+  background: #c7efcf;
+  color: #123524;
+  font-size: 9px;
+  font-weight: 900;
+}
+
 .paladin-member-label {
   width: max-content;
   max-width: 100px;

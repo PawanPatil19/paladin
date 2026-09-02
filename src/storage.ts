@@ -7,7 +7,7 @@ const KEYS = {
 };
 
 export type Profile = { deviceId: string; displayName: string; voiceEnabled: boolean; units: 'metric' | 'imperial'; demoMode: boolean };
-export type StoredSession = { code: string; participantId: string; group?: ApiGroup };
+export type StoredSession = { code: string; participantId: string; group?: ApiGroup; sharingEnabled?: boolean };
 export type StoredRideStats = { code: string; distanceKm: number; maxSpeedKmh: number; lastCoordinate?: { latitude: number; longitude: number; timestamp: number } };
 
 async function getJson<T>(key: string, fallback: T): Promise<T> {
@@ -21,7 +21,7 @@ export const storage = {
   async profile(): Promise<Profile> {
     const stored = await getJson<Partial<Profile>>(KEYS.profile, {});
     const deviceId = stored.deviceId || `device-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const profile: Profile = { deviceId, displayName: stored.displayName || '', voiceEnabled: stored.voiceEnabled ?? true, units: stored.units || 'metric', demoMode: __DEV__ && (stored.demoMode ?? false) };
+    const profile: Profile = { deviceId, displayName: stored.displayName || '', voiceEnabled: stored.voiceEnabled ?? false, units: stored.units || 'metric', demoMode: __DEV__ && (stored.demoMode ?? false) };
     if (!stored.deviceId) await setJson(KEYS.profile, profile);
     return profile;
   },
@@ -34,7 +34,14 @@ export const storage = {
     const history = await storage.history();
     await setJson(KEYS.history, [summary, ...history.filter((item) => item.code !== summary.code)].slice(0, 25));
   },
-  rideStats: (code: string) => getJson<StoredRideStats>(KEYS.rideStats, { code, distanceKm: 0, maxSpeedKmh: 0 }),
+  async rideStats(code: string) {
+    const stats = await getJson<StoredRideStats>(KEYS.rideStats, { code, distanceKm: 0, maxSpeedKmh: 0 });
+    return stats.code === code ? stats : { code, distanceKm: 0, maxSpeedKmh: 0 };
+  },
+  async setSharingEnabled(sharingEnabled: boolean) {
+    const session = await storage.session();
+    if (session) await storage.saveSession({ ...session, sharingEnabled });
+  },
   saveRideStats: (stats: StoredRideStats) => setJson(KEYS.rideStats, stats),
   clearRideStats: () => AsyncStorage.removeItem(KEYS.rideStats),
   clearAccountData: () => AsyncStorage.multiRemove([KEYS.profile, KEYS.session, KEYS.history, KEYS.rideStats]),

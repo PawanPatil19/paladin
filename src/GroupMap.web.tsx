@@ -5,7 +5,7 @@ import './map.css';
 import { colors } from './ui/theme';
 
 type MapPoint = { latitude: number; longitude: number };
-type MapMember = MapPoint & { id: string; name: string; initials: string; color: string; isYou?: boolean };
+type MapMember = MapPoint & { id: string; name: string; initials: string; color: string; isYou?: boolean; visibility?: 'paused' | 'approximate' | 'precise'; locationState?: 'paused' | 'stale' | 'delayed' | 'live'; signal?: 'together' | 'ease' | 'break' | 'help' };
 type MapDestination = MapPoint & { name: string };
 
 const TILE_URL = process.env.EXPO_PUBLIC_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -48,7 +48,9 @@ export function GroupMap({ members, start, destination, follow = true, fitKey = 
     for (const member of members) {
       const label = escapeHtml(member.isYou ? 'YOU' : member.name);
       const initials = escapeHtml(member.initials);
-      const memberIcon = icon(`<div class="paladin-member-avatar" style="background:${member.color}">${initials}</div><div class="paladin-member-label">${label}</div>`, member.isYou ? 'paladin-member-marker paladin-member-you' : 'paladin-member-marker', [48, 62], [24, 24]);
+      const signal = member.signal === 'help' ? '!' : member.signal === 'break' ? '‖' : member.signal === 'ease' ? '↓' : '✓';
+      const classes = ['paladin-member-marker', member.isYou ? 'paladin-member-you' : '', member.visibility === 'approximate' ? 'paladin-member-approximate' : '', member.locationState === 'delayed' ? 'paladin-member-delayed' : ''].filter(Boolean).join(' ');
+      const memberIcon = icon(`<div class="paladin-member-avatar" style="background:${member.color}">${initials}<span class="paladin-member-signal">${signal}</span></div><div class="paladin-member-label">${label}${member.visibility === 'approximate' ? ' · NEARBY' : ''}</div>`, classes, [56, 68], [28, 28]);
       L.marker([member.latitude, member.longitude], { icon: memberIcon, title: member.name }).addTo(content);
     }
   }, [members, start.latitude, start.longitude, start.name, destination.latitude, destination.longitude, destination.name]);

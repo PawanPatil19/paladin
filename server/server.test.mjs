@@ -41,6 +41,18 @@ test('two phones can share a code, positions, and cheers', async () => {
   assert.equal(joined.status, 201);
   assert.equal(joined.body.group.members.length, 2);
 
+  const started = await call(`/groups/${code}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ participantId: created.body.participantId }),
+  });
+  assert.equal(started.status, 200);
+
+  const consented = await call(`/groups/${code}/participants/${joined.body.participantId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ visibility: 'approximate' }),
+  });
+  assert.equal(consented.status, 200);
+
   const moved = await call(`/groups/${code}/participants/${joined.body.participantId}`, {
     method: 'PATCH',
     body: JSON.stringify({ latitude: 1.301, longitude: 103.861, pace: '6:02' }),
@@ -48,22 +60,16 @@ test('two phones can share a code, positions, and cheers', async () => {
   assert.equal(moved.status, 200);
   assert.equal(moved.body.member.latitude, 1.301);
 
-  const started = await call(`/groups/${code}/start`, {
-    method: 'POST',
-    body: JSON.stringify({ participantId: created.body.participantId }),
-  });
-  assert.equal(started.status, 200);
-
   const cheered = await call(`/groups/${code}/cheers`, {
     method: 'POST',
-    body: JSON.stringify({ senderId: joined.body.participantId, message: 'Steady lah!' }),
+    body: JSON.stringify({ senderId: joined.body.participantId, message: 'Nice!' }),
   });
   assert.equal(cheered.status, 201);
 
   const snapshot = await call(`/groups/${code}`);
   assert.equal(snapshot.status, 200);
   assert.equal(snapshot.body.group.members.find((member) => member.name === 'Mei').pace, '6:02');
-  assert.equal(snapshot.body.group.cheers[0].message, 'Steady lah!');
+  assert.equal(snapshot.body.group.cheers[0].message, 'Nice!');
 });
 
 test('running and cycling activities persist distinct start and end points', async () => {
@@ -147,4 +153,52 @@ test('resume restores membership without creating a rider', async () => {
   assert.equal(resumed.status, 200);
   assert.equal(resumed.body.participantId, created.body.participantId);
   assert.equal(resumed.body.group.members.length, 1);
+});
+
+test('location requires active consent and rejects impossible coordinates', async () => {
+  const created = await call('/groups', { method: 'POST', body: JSON.stringify({ name: 'Ari', deviceId: 'safe-a', activity: 'ride', destination: { name: 'East Coast Park' } }) });
+  const path = `/groups/${created.body.group.code}/participants/${created.body.participantId}`;
+  const lobbyLocation = await call(path, { method: 'PATCH', body: JSON.stringify({ latitude: 1.3, longitude: 103.8 }) });
+  assert.equal(lobbyLocation.status, 400);
+  await call(`/groups/${created.body.group.code}/start`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId }) });
+  const pausedLocation = await call(path, { method: 'PATCH', body: JSON.stringify({ latitude: 1.3, longitude: 103.8 }) });
+  assert.equal(pausedLocation.body.code, 'SHARING_PAUSED');
+  await call(path, { method: 'PATCH', body: JSON.stringify({ visibility: 'approximate' }) });
+  const impossible = await call(path, { method: 'PATCH', body: JSON.stringify({ latitude: 999, longitude: -999, accuracy: -5 }) });
+  assert.equal(impossible.status, 400);
+  assert.equal(impossible.body.code, 'INVALID_LOCATION');
+});
+
+test('host removal bans re-entry for the same identity', async () => {
+  const created = await call('/groups', { method: 'POST', body: JSON.stringify({ name: 'Host', deviceId: 'ban-host', destination: { name: 'East Coast Park' } }) });
+  const joined = await call(`/groups/${created.body.group.code}/join`, { method: 'POST', body: JSON.stringify({ name: 'Guest', deviceId: 'ban-guest' }) });
+  const removed = await call(`/groups/${created.body.group.code}/participants/${joined.body.participantId}`, { method: 'DELETE', body: JSON.stringify({ participantId: created.body.participantId }) });
+  assert.equal(removed.status, 200);
+  const rejoin = await call(`/groups/${created.body.group.code}/join`, { method: 'POST', body: JSON.stringify({ name: 'Guest Again', deviceId: 'ban-guest' }) });
+  assert.equal(rejoin.status, 403);
+  assert.equal(rejoin.body.code, 'REMOVED_FROM_GROUP');
+});
+
+test('cheers are allow-listed and rate limited', async () => {
+  const created = await call('/groups', { method: 'POST', body: JSON.stringify({ name: 'Host', deviceId: 'cheer-host', destination: { name: 'East Coast Park' } }) });
+  await call(`/groups/${created.body.group.code}/start`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId }) });
+  const injected = await call(`/groups/${created.body.group.code}/cheers`, { method: 'POST', body: JSON.stringify({ senderId: created.body.participantId, message: 'Call me at 555-0100' }) });
+  assert.equal(injected.status, 400);
+  const first = await call(`/groups/${created.body.group.code}/cheers`, { method: 'POST', body: JSON.stringify({ senderId: created.body.participantId, message: 'All good' }) });
+  const rapid = await call(`/groups/${created.body.group.code}/cheers`, { method: 'POST', body: JSON.stringify({ senderId: created.body.participantId, message: 'Nice!' }) });
+  assert.equal(first.status, 201);
+  assert.equal(rapid.status, 429);
+});
+
+test('Kaki Again reveals a connection only after mutual intent', async () => {
+  const created = await call('/groups', { method: 'POST', body: JSON.stringify({ name: 'Ari', deviceId: 'connect-a', activity: 'run', destination: { name: 'Marina Barrage' } }) });
+  const joined = await call(`/groups/${created.body.group.code}/join`, { method: 'POST', body: JSON.stringify({ name: 'Mei', deviceId: 'connect-b' }) });
+  await call(`/groups/${created.body.group.code}/start`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId }) });
+  await call(`/groups/${created.body.group.code}/end`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, distanceKm: 3 }) });
+  const first = await call(`/groups/${created.body.group.code}/connect`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, targetId: joined.body.participantId }) });
+  assert.equal(first.body.matched, false);
+  assert.deepEqual(first.body.group.connections, []);
+  const mutual = await call(`/groups/${created.body.group.code}/connect`, { method: 'POST', body: JSON.stringify({ participantId: joined.body.participantId, targetId: created.body.participantId }) });
+  assert.equal(mutual.body.matched, true);
+  assert.equal(mutual.body.group.connections.length, 1);
 });

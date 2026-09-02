@@ -5,14 +5,21 @@ import * as Speech from 'expo-speech';
 import { ActivityIndicator, Linking, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { activityCopy, distanceText, primaryMetricText } from '../../domain/activity';
 import { GroupMap } from '../../GroupMap';
-import { requestRideLocation, startBackgroundTracking } from '../../locationTracking';
+import { requestRideLocation, startBackgroundTracking, stopBackgroundTracking } from '../../locationTracking';
 import { acceptedMovement, elapsedSeconds, formatDuration, freshness } from '../../rideUtils';
 import { activityService, type ApiGroup, type ApiMember } from '../../services/activityService';
 import { storage, type Profile } from '../../storage';
 import { Button } from '../../ui/Button';
+import { ConfirmDialog } from '../../ui/ConfirmDialog';
 import { colors } from '../../ui/theme';
 
 const CHEERS = ['Let’s go!', 'Wait up!', 'Nice!', 'I’m behind', 'All good', 'Stop ahead'];
+const CIRCLE_CHECKS: { id: ApiMember['signal']; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { id: 'together', label: 'All good', icon: 'checkmark-circle' },
+  { id: 'ease', label: 'Ease up', icon: 'speedometer-outline' },
+  { id: 'break', label: 'Taking a break', icon: 'pause-circle-outline' },
+  { id: 'help', label: 'Need help', icon: 'alert-circle' },
+];
 
 type Props = {
   group: ApiGroup;
@@ -39,6 +46,10 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
   const [voice, setVoice] = useState(profile.voiceEnabled);
   const [cheerOpen, setCheerOpen] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [presenceOpen, setPresenceOpen] = useState(false);
+  const [checkOpen, setCheckOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
   const [toast, setToast] = useState('');
   const [locationError, setLocationError] = useState('');
   const [distance, setDistance] = useState(0);
@@ -51,15 +62,19 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
   const speaking = useRef(false);
   const previousPoint = useRef<{ latitude: number; longitude: number; timestamp: number } | null>(null);
   const host = group.hostId === participantId;
+  const self = group.members.find((member) => member.id === participantId);
+  const [sharing, setSharing] = useState<ApiMember['visibility']>(self?.visibility || 'paused');
+  const [consentNeeded, setConsentNeeded] = useState(!self?.consentAt);
   const copy = activityCopy(group.activity);
   const elapsed = elapsedSeconds(group.startedAt, now);
-  const averageSpeed = elapsed ? distance / (elapsed / 3600) : 0;
   const mapMembers = useMemo(
     () => group.members
       .filter((member): member is ApiMember & { latitude: number; longitude: number } => member.latitude != null && member.longitude != null)
       .map((member) => ({ ...member, isYou: member.id === participantId })),
     [group.members, participantId],
   );
+  const selected = group.members.find((member) => member.id === selectedId);
+  const audience = Math.max(0, group.members.length - 1);
 
   const playNext = () => {
     const next = queue.current.shift();
@@ -72,6 +87,7 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
 
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => { storage.rideStats(group.code).then((stats) => { setDistance(stats.distanceKm); setMaxSpeed(stats.maxSpeedKmh); }); }, [group.code]);
+  useEffect(() => { if (self?.visibility) setSharing(self.visibility); }, [self?.visibility]);
   useEffect(() => { const timer = setInterval(async () => { const stats = await storage.rideStats(group.code); setDistance(stats.distanceKm); setMaxSpeed(stats.maxSpeedKmh); onStats(stats.distanceKm, stats.maxSpeedKmh); }, 3000); return () => clearInterval(timer); }, [group.code]);
 
   useEffect(() => {
@@ -79,6 +95,7 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
     let demoTimer: ReturnType<typeof setInterval> | undefined;
     let cancelled = false;
     (async () => {
+      if (sharing === 'paused') { setLocationError(''); return; }
       if (__DEV__ && profile.demoMode) {
         setLocationError('');
         setToast('Development demo location active');
@@ -91,7 +108,7 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
           const latitude = startLat + Math.sin(step / 5) * 0.002;
           const longitude = startLon + step * 0.00022;
           const stats = await storage.rideStats(group.code);
-          const nextStats = { ...stats, distanceKm: stats.distanceKm + (group.activity === 'run' ? 0.012 : 0.025), maxSpeedKmh: Math.max(stats.maxSpeedKmh, speedKmh), lastCoordinate: { latitude, longitude, timestamp: Date.now() } };
+          const nextStats = { ...stats, distanceKm: stats.distanceKm + speedKmh * (2.5 / 3600), maxSpeedKmh: Math.max(stats.maxSpeedKmh, speedKmh), lastCoordinate: { latitude, longitude, timestamp: Date.now() } };
           await storage.saveRideStats(nextStats);
           setDistance(nextStats.distanceKm); setCurrentSpeed(speedKmh); setMaxSpeed(nextStats.maxSpeedKmh);
           await activityService.updateLocation(group.code, participantId, { latitude, longitude, accuracy: 5 }, primaryMetricText(group.activity, speedKmh, profile.units), speedKmh / 3.6).catch(() => undefined);
@@ -116,7 +133,7 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
       });
     })();
     return () => { cancelled = true; if (demoTimer) clearInterval(demoTimer); watcher?.remove(); };
-  }, [group.code, group.activity, group.start.latitude, group.start.longitude, participantId, profile.demoMode, profile.units, copy.participants]);
+  }, [group.code, group.activity, group.start.latitude, group.start.longitude, participantId, profile.demoMode, profile.units, copy.participants, sharing]);
 
   useEffect(() => {
     for (const cheer of group.cheers) if (!seen.current.has(cheer.id)) {
@@ -133,6 +150,26 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
     catch { setToast('Cheer not sent. Check your connection.'); }
   };
 
+  const changeVisibility = async (visibility: ApiMember['visibility']) => {
+    setPresenceOpen(false);
+    setConsentNeeded(false);
+    setSharing(visibility);
+    await storage.setSharingEnabled(visibility !== 'paused');
+    if (visibility === 'paused') await stopSharingLocally();
+    try { await activityService.presence(group.code, participantId, { visibility }); setToast(visibility === 'paused' ? 'Location paused' : visibility === 'precise' ? `Precise location shared with ${audience} ${audience === 1 ? 'person' : 'people'}` : `Approximate location shared with ${audience} ${audience === 1 ? 'person' : 'people'}`); }
+    catch { setSharing('paused'); await storage.setSharingEnabled(false); setToast('Could not change location sharing. You remain hidden.'); }
+  };
+
+  const stopSharingLocally = async () => {
+    await stopBackgroundTracking().catch(() => undefined);
+  };
+
+  const setCircleCheck = async (signal: ApiMember['signal']) => {
+    setCheckOpen(false);
+    try { await activityService.presence(group.code, participantId, { signal }); setToast(`Circle Check: ${CIRCLE_CHECKS.find((item) => item.id === signal)?.label}`); }
+    catch { setToast('Circle Check was not sent.'); }
+  };
+
   return (
     <View style={styles.fill}>
       <GroupMap
@@ -146,11 +183,12 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View pointerEvents="box-none">
           <View style={styles.header}>
-            <Pressable accessibilityRole="button" accessibilityLabel={host ? `End ${copy.noun}` : `Leave ${copy.noun}`} onPress={host ? () => setConfirmEnd(true) : onLeave} style={styles.mapButton}><Ionicons name="close" size={22} color={colors.ink} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel={host ? `End ${copy.noun}` : `Leave ${copy.noun}`} onPress={host ? () => setConfirmEnd(true) : () => setConfirmLeave(true)} style={styles.mapButton}><Ionicons name={host ? 'flag-outline' : 'exit-outline'} size={21} color={colors.ink} /></Pressable>
             <View style={styles.liveBadge}><View style={styles.liveDot} /><Ionicons name={ACTIVITY_ICON[group.activity]} size={14} color={colors.white} /><Text style={styles.liveText}>{group.code} · LIVE</Text></View>
             <Pressable accessibilityRole="button" accessibilityLabel={voice ? 'Mute voice cheers' : 'Enable voice cheers'} onPress={() => { const next = !voice; setVoice(next); storage.saveProfile({ ...profile, voiceEnabled: next }); if (voice) Speech.stop(); }} style={[styles.mapButton, voice && styles.mapButtonActive]}><Ionicons name={voice ? 'headset' : 'headset-outline'} size={21} color={voice ? colors.white : colors.ink} /></Pressable>
           </View>
           <NetworkPill online={online} connecting={reconnecting} />
+          <Pressable accessibilityRole="button" onPress={() => setPresenceOpen(true)} style={[styles.visibilityPill, sharing === 'paused' && styles.visibilityPaused]}><Ionicons name={sharing === 'paused' ? 'eye-off-outline' : sharing === 'precise' ? 'navigate' : 'radio-outline'} size={15} color={colors.ink} /><Text style={styles.visibilityText}>{sharing === 'paused' ? 'Location paused' : `${sharing === 'precise' ? 'Precise' : 'Approximate'} · ${audience} ${audience === 1 ? 'person' : 'people'}`}</Text><Ionicons name="chevron-up" size={14} color={colors.soft} /></Pressable>
           {toast ? <View style={styles.toast}><Ionicons name="volume-high" size={18} color={colors.ink} /><Text style={styles.toastText}>{toast}</Text><Pressable accessibilityLabel="Dismiss message" onPress={() => setToast('')}><Ionicons name="close" size={16} color={colors.soft} /></Pressable></View> : null}
         </View>
         <View style={styles.mapTools}>
@@ -159,23 +197,21 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
         </View>
         <View style={styles.bottomPanel}>
           {locationError ? <View style={styles.permissionCard}><Ionicons name="location-outline" size={22} color={colors.red} /><View style={styles.flex}><Text style={styles.memberName}>Location needed</Text><Text style={styles.meta}>{locationError}</Text></View><Pressable onPress={async () => { const result = await requestRideLocation(); if (result.foreground.status === 'granted') setLocationError(''); else if (!result.foreground.canAskAgain) Linking.openSettings(); }}><Text style={styles.link}>Fix</Text></Pressable></View> : null}
-          <View style={styles.routeStrip}>
-            <View style={styles.routePoint}><View style={styles.startDot} /><View style={styles.flex}><Text style={styles.routeEyebrow}>START</Text><Text style={styles.routeName} numberOfLines={1}>{group.start.name}</Text></View></View>
-            <Ionicons name="arrow-forward" size={17} color={colors.mint} />
-            <View style={styles.routePoint}><Ionicons name="flag" size={16} color={colors.lime} /><View style={styles.flex}><Text style={styles.routeEyebrow}>FINISH</Text><Text style={styles.routeName} numberOfLines={1}>{group.destination.name}</Text></View></View>
-          </View>
           <View style={styles.stats}>
             <Stat label="TIME" value={formatDuration(elapsed)} />
             <Stat label="DISTANCE" value={distanceText(distance, profile.units)} />
             <Stat label={copy.primaryMetric} value={primaryMetricText(group.activity, currentSpeed, profile.units)} />
-            <Stat label={group.activity === 'run' ? 'AVG PACE' : 'AVERAGE'} value={primaryMetricText(group.activity, averageSpeed, profile.units)} />
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.riderStrip}>{group.members.map((member) => { const live = freshness(member.lastSeen, now); return <View key={member.id} style={styles.riderChip}><View style={[styles.statusDot, { backgroundColor: live.state === 'live' ? '#59B87C' : live.state === 'delayed' ? '#E4A83A' : '#9CA7A2' }]} /><Text style={styles.memberName}>{member.name}</Text><Text style={styles.meta}>{live.label}</Text></View>; })}</ScrollView>
-          <Button label="Cheer" icon="megaphone" onPress={() => setCheerOpen(true)} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.riderStrip}>{group.members.map((member) => { const live = freshness(member.locationUpdatedAt || '', now); const check = CIRCLE_CHECKS.find((item) => item.id === member.signal); return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${member.name}'s activity status`} onPress={() => setSelectedId(member.id)} key={member.id} style={styles.riderChip}><View style={[styles.statusDot, { backgroundColor: member.visibility === 'paused' ? '#9CA7A2' : live.state === 'live' ? '#59B87C' : live.state === 'delayed' ? '#E4A83A' : '#9CA7A2' }]} /><Text style={styles.memberName}>{member.name}</Text><Text style={styles.meta}>{member.visibility === 'paused' ? 'Hidden' : live.label} · {check?.label}</Text></Pressable>; })}</ScrollView>
+          <View style={styles.liveActions}><Button label="Circle Check" secondary icon="pulse-outline" onPress={() => setCheckOpen(true)} /><Button label="Cheer" icon="megaphone" onPress={() => setCheerOpen(true)} /></View>
         </View>
       </SafeAreaView>
 
       <Modal visible={cheerOpen} transparent animationType="slide" onRequestClose={() => setCheerOpen(false)}><Pressable style={styles.backdrop} onPress={() => setCheerOpen(false)} /><SafeAreaView style={styles.sheet}><View style={styles.sheetHandle} /><Text style={styles.sheetTitle}>Quick cheer</Text><Text style={styles.sheetBody}>One tap sends a spoken message to the group.</Text><View style={styles.cheerGrid}>{CHEERS.map((cheer) => <Pressable accessibilityRole="button" key={cheer} onPress={() => sendCheer(cheer)} style={styles.cheer}><Ionicons name="volume-high" size={18} color={colors.ink} /><Text style={styles.cheerText}>{cheer}</Text></Pressable>)}</View></SafeAreaView></Modal>
+      <Modal visible={presenceOpen || consentNeeded} transparent animationType="slide" onRequestClose={() => { setPresenceOpen(false); setConsentNeeded(false); }}><Pressable style={styles.backdrop} onPress={() => { setPresenceOpen(false); setConsentNeeded(false); }} /><SafeAreaView style={styles.sheet}><View style={styles.sheetHandle} /><Text style={styles.sheetTitle}>{consentNeeded ? 'Choose your visibility.' : 'Who can see me?'}</Text><Text style={styles.sheetBody}>Only the {audience} other {audience === 1 ? 'person' : 'people'} in this private activity can see your location. It expires if updates stop.</Text><View style={styles.optionList}><Pressable accessibilityRole="button" onPress={() => changeVisibility('approximate')} style={styles.option}><Ionicons name="radio-outline" size={23} color={colors.ink} /><View style={styles.flex}><Text style={styles.memberName}>Share approximate</Text><Text style={styles.meta}>Recommended · rounded to a nearby area</Text></View></Pressable><Pressable accessibilityRole="button" onPress={() => changeVisibility('precise')} style={styles.option}><Ionicons name="navigate" size={23} color={colors.ink} /><View style={styles.flex}><Text style={styles.memberName}>Share precise</Text><Text style={styles.meta}>Best for keeping a trusted group together</Text></View></Pressable><Pressable accessibilityRole="button" onPress={() => changeVisibility('paused')} style={styles.option}><Ionicons name="eye-off-outline" size={23} color={colors.red} /><View style={styles.flex}><Text style={styles.memberName}>Stay hidden</Text><Text style={styles.meta}>Keep participating without sharing location</Text></View></Pressable></View></SafeAreaView></Modal>
+      <Modal visible={checkOpen} transparent animationType="slide" onRequestClose={() => setCheckOpen(false)}><Pressable style={styles.backdrop} onPress={() => setCheckOpen(false)} /><SafeAreaView style={styles.sheet}><View style={styles.sheetHandle} /><Text style={styles.sheetTitle}>Circle Check</Text><Text style={styles.sheetBody}>Share how you’re doing without stopping to type.</Text><View style={styles.optionList}>{CIRCLE_CHECKS.map((item) => <Pressable accessibilityRole="button" key={item.id} onPress={() => setCircleCheck(item.id)} style={styles.option}><Ionicons name={item.icon} size={23} color={item.id === 'help' ? colors.red : colors.ink} /><Text style={styles.memberName}>{item.label}</Text></Pressable>)}</View></SafeAreaView></Modal>
+      <Modal visible={Boolean(selected)} transparent animationType="slide" onRequestClose={() => setSelectedId('')}><Pressable style={styles.backdrop} onPress={() => setSelectedId('')} /><SafeAreaView style={styles.sheet}>{selected ? <><View style={styles.sheetHandle} /><Text style={styles.sheetTitle}>{selected.name}{selected.id === participantId ? ' · You' : ''}</Text><Text style={styles.sheetBody}>In your private {copy.noun} group · {selected.visibility === 'paused' ? 'location hidden' : freshness(selected.locationUpdatedAt || '', now).label.toLowerCase()} · {CIRCLE_CHECKS.find((item) => item.id === selected.signal)?.label}</Text>{selected.id !== participantId ? <View style={styles.optionList}><Pressable accessibilityRole="button" onPress={() => { setSelectedId(''); setCheerOpen(true); }} style={styles.option}><Ionicons name="megaphone-outline" size={22} color={colors.ink} /><Text style={styles.memberName}>Cheer the group</Text></Pressable><Pressable accessibilityRole="button" onPress={async () => { const target = selected.id; setSelectedId(''); await activityService.safety(group.code, participantId, target, 'block'); setToast(`${selected.name} is hidden and muted.`); }} style={styles.option}><Ionicons name="eye-off-outline" size={22} color={colors.ink} /><Text style={styles.memberName}>Hide & block</Text></Pressable><Pressable accessibilityRole="button" onPress={async () => { const target = selected.id; setSelectedId(''); await activityService.safety(group.code, participantId, target, 'report'); setToast('Report received. This participant is hidden.'); }} style={styles.option}><Ionicons name="flag-outline" size={22} color={colors.red} /><Text style={[styles.memberName, { color: colors.red }]}>Report a safety issue</Text></Pressable></View> : null}</> : null}</SafeAreaView></Modal>
+      <ConfirmDialog visible={confirmLeave} title={`Leave this ${copy.noun}?`} body="Your location will stop sharing immediately. If you are offline, the last marker expires automatically." confirmLabel={`Leave ${copy.noun}`} destructive onCancel={() => setConfirmLeave(false)} onConfirm={() => { setConfirmLeave(false); onLeave(); }} />
       <Modal visible={confirmEnd} transparent animationType="fade" onRequestClose={() => setConfirmEnd(false)}><View style={styles.confirmBackdrop}><View style={styles.confirmCard}><View style={styles.confirmIcon}><Ionicons name="flag" size={26} color={colors.ink} /></View><Text style={styles.confirmTitle}>Finish this {copy.noun}?</Text><Text style={styles.confirmBody}>Location sharing will stop for everyone and the group will receive its activity summary.</Text><View style={styles.confirmActions}><Button label={`Keep ${group.activity === 'run' ? 'running' : 'riding'}`} secondary onPress={() => setConfirmEnd(false)} /><Button label={`Finish ${copy.noun}`} onPress={() => { setConfirmEnd(false); onEnd(distance); }} /></View></View></View></Modal>
     </View>
   );
@@ -189,13 +225,15 @@ const styles = StyleSheet.create({
   mapButton: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.paper, borderWidth: 1, borderColor: 'rgba(18,53,36,0.10)', alignItems: 'center', justifyContent: 'center' }, mapButtonActive: { backgroundColor: colors.ink },
   liveBadge: { minHeight: 40, backgroundColor: colors.ink, borderRadius: 20, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 6 }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent }, liveText: { color: colors.white, fontWeight: '900', fontSize: 10, letterSpacing: 1 },
   networkPill: { alignSelf: 'center', marginTop: 10, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, backgroundColor: colors.lime, flexDirection: 'row', alignItems: 'center', gap: 7 }, networkText: { color: colors.ink, fontWeight: '800', fontSize: 11 },
+  visibilityPill: { alignSelf: 'center', marginTop: 9, minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: colors.paper, borderWidth: 1, borderColor: 'rgba(18,53,36,0.12)', flexDirection: 'row', alignItems: 'center', gap: 6 }, visibilityPaused: { backgroundColor: '#F1E8E4' }, visibilityText: { color: colors.ink, fontWeight: '800', fontSize: 10 },
   toast: { marginHorizontal: 16, marginTop: 10, backgroundColor: colors.lime, borderRadius: 16, paddingHorizontal: 13, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 9 }, toastText: { flex: 1, color: colors.ink, fontSize: 12, fontWeight: '700' },
   mapTools: { position: 'absolute', right: 16, top: Platform.OS === 'android' ? 128 : 112, gap: 10 }, mapTool: { minWidth: 62, backgroundColor: colors.paper, borderRadius: 18, paddingHorizontal: 10, paddingVertical: 9, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(18,53,36,0.10)' }, mapToolActive: { backgroundColor: colors.lime }, mapToolText: { color: colors.ink, fontSize: 8, fontWeight: '800', marginTop: 3 },
   bottomPanel: { marginHorizontal: 10, marginBottom: Platform.OS === 'android' ? 10 : 6, padding: 12, gap: 10, borderRadius: 27, backgroundColor: 'rgba(234,242,238,0.97)', borderWidth: 1, borderColor: 'rgba(18,53,36,0.10)' },
   permissionCard: { backgroundColor: '#FCE5DE', borderRadius: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, link: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   routeStrip: { backgroundColor: colors.ink, borderRadius: 18, paddingHorizontal: 13, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10 }, routePoint: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }, startDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: colors.white, borderWidth: 3, borderColor: colors.accent }, routeEyebrow: { color: colors.mint, fontSize: 7, fontWeight: '900', letterSpacing: 1.2 }, routeName: { color: colors.white, fontWeight: '800', fontSize: 11, marginTop: 2 },
-  stats: { backgroundColor: colors.paper, borderRadius: 20, padding: 8, flexDirection: 'row', flexWrap: 'wrap', borderWidth: 1, borderColor: colors.line }, stat: { width: '50%', minHeight: 53, paddingVertical: 7, paddingHorizontal: 10, justifyContent: 'center' }, statLabel: { color: colors.soft, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, statValue: { color: colors.ink, fontSize: 16, fontWeight: '900', marginTop: 3 },
+  stats: { backgroundColor: colors.paper, borderRadius: 20, padding: 8, flexDirection: 'row', borderWidth: 1, borderColor: colors.line }, stat: { flex: 1, minHeight: 53, paddingVertical: 7, paddingHorizontal: 8, justifyContent: 'center' }, statLabel: { color: colors.soft, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, statValue: { color: colors.ink, fontSize: 15, fontWeight: '900', marginTop: 3 },
   riderStrip: { gap: 8, paddingRight: 8 }, riderChip: { minWidth: 134, backgroundColor: colors.paper, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 9, borderWidth: 1, borderColor: colors.line }, statusDot: { width: 7, height: 7, borderRadius: 4, position: 'absolute', right: 10, top: 10 }, memberName: { color: colors.ink, fontSize: 12, fontWeight: '800' }, meta: { color: colors.soft, fontSize: 9, lineHeight: 14, marginTop: 2 },
   backdrop: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(18,53,36,0.35)' }, sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.cream, paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 24 : 32, borderTopLeftRadius: 28, borderTopRightRadius: 28 }, sheetHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: colors.line, alignSelf: 'center', marginBottom: 22 }, sheetTitle: { color: colors.ink, fontSize: 30, fontWeight: '900' }, sheetBody: { color: colors.soft, fontSize: 14, lineHeight: 20, marginTop: 8 }, cheerGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 10, rowGap: 10, marginTop: 22 }, cheer: { flexBasis: '47%', flexGrow: 1, minHeight: 64, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.line, borderRadius: 17, paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, cheerText: { flexShrink: 1, color: colors.ink, fontSize: 13, lineHeight: 18, fontWeight: '800' },
+  optionList: { marginTop: 20, gap: 9 }, option: { minHeight: 64, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.line, borderRadius: 17, paddingHorizontal: 15, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 12 }, liveActions: { flexDirection: 'row', gap: 9 },
   confirmBackdrop: { flex: 1, padding: 24, justifyContent: 'center', backgroundColor: 'rgba(18,53,36,0.46)' }, confirmCard: { borderRadius: 26, backgroundColor: colors.cream, padding: 22 }, confirmIcon: { width: 52, height: 52, borderRadius: 18, backgroundColor: colors.lime, alignItems: 'center', justifyContent: 'center', marginBottom: 18 }, confirmTitle: { color: colors.ink, fontSize: 26, fontWeight: '900' }, confirmBody: { color: colors.soft, fontSize: 14, lineHeight: 21, marginTop: 9 }, confirmActions: { gap: 10, marginTop: 22 },
 });

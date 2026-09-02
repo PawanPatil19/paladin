@@ -56,6 +56,7 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
   const [activityName, setActivityName] = useState('');
   const [groupName, setGroupName] = useState('');
   const [route, setRoute] = useState(DEFAULT_ROUTE);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const validRoute = routeIsValid(route);
   const valid = name.trim().length >= 2 && (mode === 'join' ? code.length === 6 : validRoute);
   const copy = ACTIVITY[activity];
@@ -69,11 +70,11 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
           <View style={styles.headerSpacer} />
         </View>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Text style={styles.kicker}>{mode === 'create' ? 'PLAN TOGETHER' : 'ENTER YOUR CODE'}</Text>
-          <Text style={styles.pageTitle}>{mode === 'create' ? 'Set the meeting points.' : 'Your group is waiting.'}</Text>
-          <Text style={styles.body}>{mode === 'create' ? 'Pick running or cycling, then choose where everyone meets and finishes.' : 'Codes are six letters or numbers and are not case-sensitive.'}</Text>
+          <Text style={styles.kicker}>{mode === 'create' ? 'MOVE TOGETHER' : 'ENTER YOUR CODE'}</Text>
+          <Text style={styles.pageTitle}>{mode === 'create' ? 'What are we doing?' : 'Your group is waiting.'}</Text>
+          <Text style={styles.body}>{mode === 'create' ? 'Choose the activity. Paladin creates the group; meeting details are optional.' : 'Enter the private six-character code shared by your host.'}</Text>
 
-          <View style={styles.field}><Text style={styles.fieldLabel}>DISPLAY NAME</Text><TextInput value={name} onChangeText={setName} placeholder="What should we call you?" placeholderTextColor="#97A59F" style={styles.input} maxLength={24} /></View>
+          {!profile.displayName ? <View style={styles.field}><Text style={styles.fieldLabel}>DISPLAY NAME</Text><TextInput value={name} onChangeText={setName} placeholder="What should we call you?" placeholderTextColor="#97A59F" style={styles.input} maxLength={24} /></View> : null}
 
           {mode === 'join' ? (
             <View style={styles.field}><Text style={styles.fieldLabel}>GROUP CODE</Text><TextInput value={code} onChangeText={(value) => setCode(value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))} placeholder="CCAM34" placeholderTextColor="#97A59F" style={[styles.input, styles.codeInput]} autoCapitalize="characters" /></View>
@@ -88,16 +89,13 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
                   })}
                 </View>
               </View>
-              <View style={styles.field}><Text style={styles.fieldLabel}>{copy.noun.toUpperCase()} NAME · OPTIONAL</Text><TextInput value={activityName} onChangeText={setActivityName} placeholder={activity === 'run' ? 'Saturday park run' : 'Sunday morning ride'} placeholderTextColor="#97A59F" style={styles.input} maxLength={50} /></View>
-              <View style={styles.field}><Text style={styles.fieldLabel}>GROUP NAME · OPTIONAL</Text><TextInput value={groupName} onChangeText={setGroupName} placeholder="East Side Kaki" placeholderTextColor="#97A59F" style={styles.input} maxLength={40} /></View>
-              <PointPicker label="START POINT" marker="A" value={route.start} onChange={(start) => setRoute({ ...route, start })} />
-              <PointPicker label="END POINT" marker="B" value={route.end} onChange={(end) => setRoute({ ...route, end })} />
-              <View style={[styles.routeSummary, !validRoute && styles.routeSummaryError]}><Ionicons name={validRoute ? 'people-outline' : 'alert-circle-outline'} size={21} color={validRoute ? colors.ink : colors.red} /><View style={styles.flex}><Text style={styles.routeSummaryTitle}>{validRoute ? `${route.start.name} → ${route.end.name}` : 'Choose two different points'}</Text>{validRoute ? <Text style={styles.routeSummaryText}>These points help everyone meet and finish together.</Text> : null}</View></View>
+              <Pressable accessibilityRole="button" accessibilityState={{ expanded: detailsOpen }} onPress={() => setDetailsOpen((open) => !open)} style={styles.detailsToggle}><View style={styles.detailsIcon}><Ionicons name="location-outline" size={20} color={colors.ink} /></View><View style={styles.flex}><Text style={styles.routeSummaryTitle}>Meeting details</Text><Text style={styles.routeSummaryText}>{route.start.name} → {route.end.name}</Text></View><Text style={styles.optional}>OPTIONAL</Text><Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={19} color={colors.soft} /></Pressable>
+              {detailsOpen ? <View><View style={styles.field}><Text style={styles.fieldLabel}>{copy.noun.toUpperCase()} NAME · OPTIONAL</Text><TextInput value={activityName} onChangeText={setActivityName} placeholder={activity === 'run' ? 'Saturday park run' : 'Sunday morning ride'} placeholderTextColor="#97A59F" style={styles.input} maxLength={50} /></View><View style={styles.field}><Text style={styles.fieldLabel}>GROUP NAME · OPTIONAL</Text><TextInput value={groupName} onChangeText={setGroupName} placeholder="East Side Kaki" placeholderTextColor="#97A59F" style={styles.input} maxLength={40} /></View><PointPicker label="MEET AT" marker="A" value={route.start} onChange={(start) => setRoute({ ...route, start })} /><PointPicker label="FINISH NEAR" marker="B" value={route.end} onChange={(end) => setRoute({ ...route, end })} />{!validRoute ? <View style={[styles.routeSummary, styles.routeSummaryError]}><Ionicons name="alert-circle-outline" size={21} color={colors.red} /><Text style={styles.routeSummaryTitle}>Choose two different points</Text></View> : null}</View> : null}
             </>
           )}
           {error ? <View style={styles.error}><Ionicons name="alert-circle" size={19} color={colors.red} /><Text style={styles.errorText}>{error}</Text></View> : null}
         </ScrollView>
-        <View style={styles.sticky}><Button disabled={!valid || busy} label={busy ? (mode === 'create' ? 'Creating…' : 'Joining…') : mode === 'create' ? `Create ${copy.label} Group` : 'Join Activity'} icon="arrow-forward" onPress={() => onSubmit({ name: name.trim(), code, activity, activityName: activityName.trim(), groupName: groupName.trim(), route })} /></View>
+        <View style={styles.sticky}><Button disabled={!valid || busy} label={busy ? (mode === 'create' ? 'Creating…' : 'Joining…') : mode === 'create' ? `Create ${copy.label} Group` : 'Preview & Join'} icon="arrow-forward" onPress={() => onSubmit({ name: name.trim(), code, activity, activityName: activityName.trim(), groupName: groupName.trim(), route })} /></View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -119,6 +117,7 @@ const styles = StyleSheet.create({
   pointList: { gap: 10, paddingRight: 24 }, pointCard: { width: 168, minHeight: 126, padding: 14, borderRadius: 20, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.line, gap: 7 }, pointCardActive: { backgroundColor: colors.ink, borderColor: colors.ink },
   pointName: { color: colors.ink, fontWeight: '800', fontSize: 14 }, pointTextActive: { color: colors.white }, pointAddress: { color: colors.soft, fontSize: 10, lineHeight: 14 }, pointAddressActive: { color: colors.mint },
   routeSummary: { marginTop: 20, borderRadius: 18, backgroundColor: colors.mint, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11 }, routeSummaryError: { backgroundColor: '#FCE5DE' }, routeSummaryTitle: { color: colors.ink, fontWeight: '800', fontSize: 13 }, routeSummaryText: { color: colors.soft, fontSize: 10, marginTop: 3 },
+  detailsToggle: { marginTop: 24, minHeight: 70, borderRadius: 19, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.paper, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 11 }, detailsIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }, optional: { color: colors.accent, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   error: { marginTop: 20, padding: 13, borderRadius: 14, backgroundColor: '#FCE5DE', flexDirection: 'row', alignItems: 'center', gap: 9 }, errorText: { flex: 1, color: colors.red, fontSize: 12, lineHeight: 17 },
   sticky: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 22 : 12, backgroundColor: colors.cream, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
 });
