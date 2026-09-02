@@ -11,13 +11,20 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Paladin to share your live location with your active run or ride group."
+          "locationWhenInUsePermission": "Allow Paladin to share your live location with your active ride group.",
+          "locationAlwaysAndWhenInUsePermission": "Allow Paladin to keep your ride active and share your location while your screen is locked."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.paladin.app"
+      "bundleIdentifier": "com.paladin.app",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -27,7 +34,14 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.paladin.app"
+      "package": "com.paladin.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

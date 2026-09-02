@@ -1,0 +1,83 @@
+import { useEffect, useMemo, useRef } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import { Ionicons } from '@expo/vector-icons';
+
+type MapMember = {
+  id: string;
+  name: string;
+  initials: string;
+  color: string;
+  pace: string;
+  latitude: number;
+  longitude: number;
+  isYou?: boolean;
+};
+
+type MapDestination = {
+  name: string;
+  latitude: number;
+  longitude: number;
+};
+
+const SG_REGION = {
+  latitude: 1.2903,
+  longitude: 103.8612,
+  latitudeDelta: 0.033,
+  longitudeDelta: 0.033,
+};
+
+export function GroupMap({ members, destination, follow = true, fitKey = 0, onGesture }: { members: MapMember[]; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
+  const mapRef = useRef<MapView>(null);
+  const route = useMemo(
+    () => [...members.map(({ latitude, longitude }) => ({ latitude, longitude })), { latitude: destination.latitude, longitude: destination.longitude }],
+    [members, destination],
+  );
+
+  useEffect(() => {
+    if (route.length < 2) return;
+    mapRef.current?.fitToCoordinates(route, {
+      animated: true,
+      edgePadding: { top: 120, right: 60, bottom: 310, left: 60 },
+    });
+  }, [fitKey]);
+
+  const me = members.find((member) => member.isYou);
+  useEffect(() => {
+    if (!follow || !me) return;
+    mapRef.current?.animateCamera({ center: { latitude: me.latitude, longitude: me.longitude } }, { duration: 500 });
+  }, [follow, me?.latitude, me?.longitude]);
+
+  return (
+    <MapView
+      ref={mapRef}
+      style={StyleSheet.absoluteFill}
+      initialRegion={SG_REGION}
+      showsCompass={false}
+      showsPointsOfInterests={false}
+      toolbarEnabled={false}
+      onPanDrag={onGesture}
+      onMapReady={() => mapRef.current?.fitToCoordinates(route, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}
+    >
+      <Polyline coordinates={route} strokeColor="#FF6846" strokeWidth={5} lineDashPattern={[2, 1]} />
+      <Marker coordinate={{ latitude: destination.latitude, longitude: destination.longitude }} title={destination.name}>
+        <View style={styles.destinationMarker}><Ionicons name="flag" size={18} color="#18352C" /></View>
+      </Marker>
+      {members.map((member) => (
+        <Marker key={member.id} coordinate={{ latitude: member.latitude, longitude: member.longitude }} title={member.name} description={member.isYou ? 'You' : `${member.pace} pace`}>
+          <View style={[styles.avatarRing, member.isYou && styles.avatarRingYou]}>
+            <View style={[styles.avatar, { backgroundColor: member.color }]}><Text style={styles.avatarText}>{member.initials}</Text></View>
+          </View>
+        </Marker>
+      ))}
+    </MapView>
+  );
+}
+
+const styles = StyleSheet.create({
+  avatarRing: { borderRadius: 24, borderWidth: 3, borderColor: '#FFFCF6', shadowColor: '#18352C', shadowOpacity: 0.22, shadowRadius: 4, elevation: 5 },
+  avatarRingYou: { borderColor: '#D7F26D', borderWidth: 4 },
+  avatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  destinationMarker: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#D7F26D', borderWidth: 3, borderColor: '#FFFCF6', alignItems: 'center', justifyContent: 'center' },
+});

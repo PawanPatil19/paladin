@@ -3,689 +3,177 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
+import * as Clipboard from 'expo-clipboard';
+import NetInfo from '@react-native-community/netinfo';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
-  Dimensions,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
+  ActivityIndicator, Alert, Animated, AppState, KeyboardAvoidingView, Linking, Modal, Platform,
+  Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
-import MapView, { Marker, Polyline, Region } from 'react-native-maps';
-import { groupApi, type ApiGroup } from './src/api';
+import { ApiError, groupApi, type ApiGroup, type ApiMember, type RideSummary } from './src/api';
+import { GroupMap } from './src/GroupMap';
+import { locationPermissionStatus, requestRideLocation, startBackgroundTracking, stopBackgroundTracking } from './src/locationTracking';
+import { acceptedMovement, elapsedSeconds, formatDuration, freshness } from './src/rideUtils';
+import { storage, type Profile } from './src/storage';
 
-type Activity = 'run' | 'ride';
-type Screen = 'home' | 'setup' | 'lobby' | 'active';
+type Screen = 'boot' | 'onboarding' | 'home' | 'setup' | 'lobby' | 'active' | 'summary' | 'settings' | 'history';
 type Mode = 'create' | 'join';
-type Coordinate = { latitude: number; longitude: number };
-type Destination = Coordinate & { name: string; area: string; distance: string; icon: keyof typeof Ionicons.glyphMap };
-type Member = Coordinate & { id: string; name: string; initials: string; color: string; pace: string; isYou?: boolean };
+type Destination = ApiGroup['destination'] & { icon: keyof typeof Ionicons.glyphMap };
 
-const C = {
-  cream: '#F7F3EA',
-  paper: '#FFFCF6',
-  ink: '#18352C',
-  inkSoft: '#527068',
-  orange: '#FF6846',
-  mint: '#BCE9D9',
-  lime: '#D7F26D',
-  blue: '#7CA8F8',
-  line: '#DADDD4',
-  white: '#FFFFFF',
-};
-
+const C = { cream: '#F7F3EA', paper: '#FFFCF6', ink: '#18352C', soft: '#527068', orange: '#FF6846', mint: '#BCE9D9', lime: '#D7F26D', blue: '#7CA8F8', line: '#DADDD4', white: '#FFFFFF', red: '#A33D2C' };
 const DESTINATIONS: Destination[] = [
-  { name: 'Marina Barrage', area: 'Marina Bay', distance: '5.2 km', latitude: 1.2807, longitude: 103.8712, icon: 'water-outline' },
-  { name: 'East Coast Park', area: 'Marine Cove', distance: '8.4 km', latitude: 1.3018, longitude: 103.9127, icon: 'leaf-outline' },
-  { name: 'MacRitchie', area: 'Reservoir Park', distance: '10.1 km', latitude: 1.3448, longitude: 103.8224, icon: 'trail-sign-outline' },
-  { name: 'Rail Corridor', area: 'Bukit Timah', distance: '7.8 km', latitude: 1.3324, longitude: 103.7817, icon: 'git-branch-outline' },
+  { name: 'Marina Barrage', area: 'Marina Bay', address: '8 Marina Gardens Drive', distance: '5.2 km', latitude: 1.2807, longitude: 103.8712, icon: 'water-outline' },
+  { name: 'East Coast Park', area: 'Marine Cove', address: '1000 East Coast Parkway', distance: '8.4 km', latitude: 1.3018, longitude: 103.9127, icon: 'leaf-outline' },
+  { name: 'MacRitchie Reservoir', area: 'Central Water Catchment', address: 'Lornie Road', distance: '10.1 km', latitude: 1.3448, longitude: 103.8224, icon: 'trail-sign-outline' },
+  { name: 'Rail Corridor', area: 'Bukit Timah', address: 'King Albert Park', distance: '7.8 km', latitude: 1.3324, longitude: 103.7817, icon: 'git-branch-outline' },
 ];
+const CHEERS = ['Let’s go!', 'Wait up!', 'Nice!', 'I’m behind', 'All good', 'Stop ahead'];
+const EMPTY_PROFILE: Profile = { deviceId: '', displayName: '', voiceEnabled: true, units: 'metric', demoMode: false };
 
-const CHEERS = [
-  { emoji: '🔥', text: 'Steady lah, you’ve got this!' },
-  { emoji: '💨', text: 'Nice pace! Keep it smooth.' },
-  { emoji: '🙌', text: 'Almost there, kaki!' },
-  { emoji: '💧', text: 'Hydration check, everyone.' },
-  { emoji: '🚲', text: 'Clear road ahead. Let’s roll!' },
-  { emoji: '🌴', text: 'Strong together, finish together.' },
-];
-
-const SG_REGION: Region = {
-  latitude: 1.2903,
-  longitude: 103.8612,
-  latitudeDelta: 0.033,
-  longitudeDelta: 0.033,
-};
-
-function distanceKmBetween(a: Coordinate, b: Coordinate) {
-  const radiusKm = 6371;
-  const radians = (degrees: number) => degrees * Math.PI / 180;
-  const latDelta = radians(b.latitude - a.latitude);
-  const lngDelta = radians(b.longitude - a.longitude);
-  const value = Math.sin(latDelta / 2) ** 2
-    + Math.cos(radians(a.latitude)) * Math.cos(radians(b.latitude)) * Math.sin(lngDelta / 2) ** 2;
-  return radiusKm * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+function Button({ label, onPress, secondary, danger, disabled, icon }: { label: string; onPress: () => void; secondary?: boolean; danger?: boolean; disabled?: boolean; icon?: keyof typeof Ionicons.glyphMap }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.button, secondary && s.buttonSecondary, danger && s.buttonDanger, disabled && s.disabled, pressed && s.pressed]}>
+    <Text style={[s.buttonText, secondary && s.buttonTextSecondary]}>{label}</Text>{icon ? <Ionicons name={icon} size={19} color={secondary ? C.ink : C.white} /> : null}
+  </Pressable>;
 }
 
-function livePace(speedMetresPerSecond: number | null, activity: Activity) {
-  if (!speedMetresPerSecond || speedMetresPerSecond <= 0.3) return 'Moving';
-  if (activity === 'ride') return `${(speedMetresPerSecond * 3.6).toFixed(1)}`;
-  const paceSeconds = 1000 / speedMetresPerSecond;
-  return `${Math.floor(paceSeconds / 60)}:${Math.round(paceSeconds % 60).toString().padStart(2, '0')}`;
+function Header({ title, onBack, right }: { title: string; onBack?: () => void; right?: React.ReactNode }) {
+  return <View style={s.header}>{onBack ? <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={onBack} style={s.iconButton}><Ionicons name="arrow-back" size={21} color={C.ink} /></Pressable> : <Logo />}
+    <Text style={s.headerTitle}>{title}</Text>{right || <View style={{ width: 42 }} />}</View>;
 }
 
-function Logo({ compact = false }: { compact?: boolean }) {
-  return (
-    <View style={styles.logoRow}>
-      <View style={[styles.logoMark, compact && styles.logoMarkCompact]}>
-        <View style={styles.logoDot} />
-        <View style={styles.logoTrail} />
-      </View>
-      <Text style={[styles.logoText, compact && styles.logoTextCompact]}>PALADIN</Text>
-    </View>
-  );
+function Logo() { return <View style={s.logo}><View style={s.logoMark}><View style={s.logoDot} /><View style={s.logoTrail} /></View><Text style={s.logoText}>PALADIN</Text></View>; }
+function Initials({ member, size = 44 }: { member: Pick<ApiMember, 'initials' | 'color'>; size?: number }) { return <View style={[s.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: member.color }]}><Text style={s.avatarText}>{member.initials}</Text></View>; }
+function NetworkPill({ online, connecting }: { online: boolean; connecting: boolean }) { return !online || connecting ? <View style={s.networkPill}><ActivityIndicator size="small" color={C.ink} /><Text style={s.networkText}>{online ? 'Reconnecting…' : 'Offline · ride stays active'}</Text></View> : null; }
+function distanceText(km: number, units: Profile['units'], decimals = 2) { return units === 'imperial' ? `${(km * 0.621371).toFixed(decimals)} mi` : `${km.toFixed(decimals)} km`; }
+function speedText(kmh: number, units: Profile['units']) { return units === 'imperial' ? `${(kmh * 0.621371).toFixed(1)} mph` : `${kmh.toFixed(1)} km/h`; }
+
+function Onboarding({ onDone }: { onDone: () => Promise<void> }) {
+  const [step, setStep] = useState(0); const [busy, setBusy] = useState(false);
+  const pages = [
+    { icon: 'people-circle-outline' as const, kicker: 'WELCOME TO PALADIN', title: 'Ride together.\nStay together.', body: 'See where your friends are, share ride information, and stay connected with quick voice cheers.' },
+    { icon: 'location-outline' as const, kicker: 'LIVE LOCATION', title: 'Your group,\non one map.', body: 'Paladin uses your location during active rides so your friends can see where you are. Sharing stops when you leave or finish.' },
+    { icon: 'headset-outline' as const, kicker: 'SAFE & SIMPLE', title: 'Ready to\nhit the road.', body: 'Large controls and one-tap cheers keep interaction quick. Only use Paladin while safely stopped.' },
+  ]; const page = pages[step];
+  const next = async () => { if (step === 1) await requestRideLocation(); if (step < pages.length - 1) setStep(step + 1); else { setBusy(true); await onDone(); } };
+  return <LinearGradient colors={[C.cream, '#E5F1E6']} style={s.fill}><SafeAreaView style={s.onboarding}><Logo /><View style={s.onboardHero}><View style={s.onboardIcon}><Ionicons name={page.icon} size={54} color={C.ink} /></View><Text style={s.kicker}>{page.kicker}</Text><Text style={s.bigTitle}>{page.title}</Text><Text style={s.body}>{page.body}</Text></View><View><View style={s.dots}>{pages.map((_, index) => <View key={index} style={[s.dot, index === step && s.dotActive]} />)}</View><Button disabled={busy} label={step === pages.length - 1 ? 'Open Paladin' : step === 1 ? 'Allow location' : 'Continue'} icon="arrow-forward" onPress={next} />{step === 1 ? <Pressable onPress={() => setStep(2)}><Text style={s.skip}>Not now</Text></Pressable> : null}</View></SafeAreaView></LinearGradient>;
 }
 
-function PillButton({ label, icon, onPress, secondary = false, disabled = false }: { label: string; icon?: keyof typeof Ionicons.glyphMap; onPress: () => void; secondary?: boolean; disabled?: boolean }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [styles.pillButton, secondary && styles.pillButtonSecondary, disabled && styles.buttonDisabled, pressed && styles.pressed]}
-    >
-      <Text style={[styles.pillButtonText, secondary && styles.pillButtonTextSecondary]}>{label}</Text>
-      {icon ? <Ionicons name={icon} size={19} color={secondary ? C.ink : C.white} /> : null}
-    </Pressable>
-  );
+function Home({ profile, active, history, onCreate, onJoin, onResume, onSettings, onHistory, onOpenRide }: { profile: Profile; active: ApiGroup | null; history: RideSummary[]; onCreate: () => void; onJoin: () => void; onResume: () => void; onSettings: () => void; onHistory: () => void; onOpenRide: (ride: RideSummary) => void }) {
+  return <LinearGradient colors={[C.cream, '#E8F2E6']} style={s.fill}><SafeAreaView style={s.fill}><ScrollView contentContainerStyle={s.home}>
+    <View style={s.homeHeader}><Logo /><Pressable accessibilityLabel="Settings" onPress={onSettings} style={s.iconButton}><Ionicons name="settings-outline" size={21} color={C.ink} /></Pressable></View>
+    <View><Text style={s.kicker}>{profile.displayName ? `WELCOME BACK, ${profile.displayName.toUpperCase()}` : 'YOUR PEOPLE. ONE ROUTE.'}</Text><Text style={s.heroTitle}>Never lose a <Text style={{ color: C.orange, fontStyle: 'italic' }}>kaki.</Text></Text><Text style={s.body}>Create a cycling group, share one code, and keep everyone connected from rollout to finish.</Text></View>
+    {active ? <View style={s.activeCard}><View style={s.activeIcon}><Ionicons name="bicycle" size={25} color={C.white} /></View><View style={{ flex: 1 }}><Text style={s.kicker}>ACTIVE RIDE · {active.code}</Text><Text style={s.cardTitle}>{active.destination.name}</Text><Text style={s.meta}>{active.members.length} rider{active.members.length === 1 ? '' : 's'} connected</Text></View><Ionicons name="chevron-forward" size={20} color={C.ink} /></View> : null}
+    <View style={{ gap: 11 }}>{active ? <Button label="Resume Ride" icon="navigate" onPress={onResume} /> : <Button label="Create Ride" icon="add" onPress={onCreate} />}<Button label="Join Ride" icon="keypad-outline" secondary onPress={onJoin} /></View>
+    <View><View style={s.sectionHead}><Text style={s.sectionTitle}>RECENT RIDES</Text>{history.length ? <Pressable onPress={onHistory}><Text style={s.link}>View all</Text></Pressable> : null}</View>{history.length ? history.slice(0, 2).map((ride) => <SummaryRow key={ride.code} units={profile.units} ride={ride} onPress={() => onOpenRide(ride)} />) : <View style={s.empty}><Ionicons name="trail-sign-outline" size={30} color={C.soft} /><Text style={s.emptyTitle}>No rides yet</Text><Text style={s.meta}>Create a group and hit the road.</Text></View>}</View>
+  </ScrollView></SafeAreaView></LinearGradient>;
 }
 
-function HomeScreen({ onChoose }: { onChoose: (mode: Mode) => void }) {
-  return (
-    <LinearGradient colors={[C.cream, '#E8F2E6']} style={styles.fill}>
-      <SafeAreaView style={styles.fill}>
-        <View style={styles.homeWrap}>
-          <View style={styles.homeTop}>
-            <Logo />
-            <View style={styles.sgBadge}><Text style={styles.sgBadgeText}>MADE FOR SG</Text><Text>🇸🇬</Text></View>
-          </View>
-
-          <View style={styles.heroArt}>
-            <View style={styles.routeLoopOne} />
-            <View style={styles.routeLoopTwo} />
-            <View style={[styles.runnerDot, { top: 36, left: 44, backgroundColor: C.orange }]}><Text style={styles.runnerInitial}>M</Text></View>
-            <View style={[styles.runnerDot, { right: 36, top: 118, backgroundColor: C.blue }]}><Text style={styles.runnerInitial}>D</Text></View>
-            <View style={[styles.runnerDot, { bottom: 30, left: 110, backgroundColor: C.ink }]}><Ionicons name="flag" size={17} color={C.lime} /></View>
-            <View style={styles.voiceBubble}><Ionicons name="volume-high" size={18} color={C.ink} /><Text style={styles.voiceBubbleText}>“Steady lah!”</Text></View>
-          </View>
-
-          <View>
-            <Text style={styles.heroKicker}>YOUR PEOPLE. ONE ROUTE.</Text>
-            <Text style={styles.heroTitle}>Move together.{`\n`}Never lose a <Text style={styles.heroAccent}>kaki.</Text></Text>
-            <Text style={styles.heroCopy}>Create a group run or ride, share one code, and keep everyone close — from the first step to makan after.</Text>
-          </View>
-
-          <View style={styles.homeActions}>
-            <PillButton label="Start a group" icon="arrow-forward" onPress={() => onChoose('create')} />
-            <PillButton label="Join with a code" icon="keypad-outline" secondary onPress={() => onChoose('join')} />
-          </View>
-        </View>
-      </SafeAreaView>
-    </LinearGradient>
-  );
-}
-
-function SetupScreen({ mode, busy, error, onBack, onContinue }: { mode: Mode; busy: boolean; error: string; onBack: () => void; onContinue: (data: { name: string; code: string; activity: Activity; destination: Destination }) => Promise<void> }) {
-  const [name, setName] = useState('');
-  const [code, setCode] = useState('');
-  const [activity, setActivity] = useState<Activity>('run');
-  const [destination, setDestination] = useState(DESTINATIONS[0]);
+function Setup({ mode, profile, busy, error, onBack, onSubmit }: { mode: Mode; profile: Profile; busy: boolean; error: string; onBack: () => void; onSubmit: (data: { name: string; code: string; rideName: string; groupName: string; destination: Destination }) => void }) {
+  const [name, setName] = useState(profile.displayName); const [code, setCode] = useState(''); const [rideName, setRideName] = useState(''); const [groupName, setGroupName] = useState(''); const [destination, setDestination] = useState(DESTINATIONS[0]);
   const valid = name.trim().length >= 2 && (mode === 'create' || code.length === 6);
+  return <SafeAreaView style={s.screen}><KeyboardAvoidingView style={s.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><Header title={mode === 'create' ? 'CREATE RIDE' : 'JOIN RIDE'} onBack={onBack} /><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+    <Text style={s.kicker}>{mode === 'create' ? 'NEW GROUP' : 'ENTER YOUR CODE'}</Text><Text style={s.pageTitle}>{mode === 'create' ? 'Plan the ride.' : 'Your group is waiting.'}</Text><Text style={s.body}>{mode === 'create' ? 'Keep it lightweight. You can change the destination before starting.' : 'Codes are six letters or numbers and are not case-sensitive.'}</Text>
+    <Field label="DISPLAY NAME"><TextInput value={name} onChangeText={setName} placeholder="What should we call you?" placeholderTextColor="#97A59F" style={s.input} maxLength={24} /></Field>
+    {mode === 'join' ? <Field label="GROUP CODE"><TextInput value={code} onChangeText={(value) => setCode(value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))} placeholder="CCAM34" placeholderTextColor="#97A59F" style={[s.input, s.codeInput]} autoCapitalize="characters" /></Field> : <>
+      <Field label="RIDE NAME · OPTIONAL"><TextInput value={rideName} onChangeText={setRideName} placeholder="Sunday morning spin" placeholderTextColor="#97A59F" style={s.input} maxLength={50} /></Field>
+      <Field label="GROUP NAME · OPTIONAL"><TextInput value={groupName} onChangeText={setGroupName} placeholder="East Side Kaki" placeholderTextColor="#97A59F" style={s.input} maxLength={40} /></Field>
+      <Field label="DESTINATION"><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>{DESTINATIONS.map((item) => <Pressable key={item.name} onPress={() => setDestination(item)} style={[s.destination, destination.name === item.name && s.destinationActive]}><Ionicons name={item.icon} size={22} color={destination.name === item.name ? C.white : C.ink} /><Text style={[s.destinationName, destination.name === item.name && { color: C.white }]}>{item.name}</Text><Text style={[s.meta, destination.name === item.name && { color: '#E8F3EF' }]}>{item.address}</Text></Pressable>)}</ScrollView></Field>
+    </>}{error ? <View style={s.error}><Ionicons name="alert-circle" size={19} color={C.red} /><Text style={s.errorText}>{error}</Text></View> : null}
+  </ScrollView><View style={s.sticky}><Button disabled={!valid || busy} label={busy ? (mode === 'create' ? 'Creating ride…' : 'Joining ride…') : mode === 'create' ? 'Create Ride' : 'Join Ride'} icon="arrow-forward" onPress={() => onSubmit({ name: name.trim(), code, rideName: rideName.trim(), groupName: groupName.trim(), destination })} /></View></KeyboardAvoidingView></SafeAreaView>;
+}
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <View style={{ marginTop: 26 }}><Text style={s.fieldLabel}>{label}</Text>{children}</View>; }
 
-  return (
-    <SafeAreaView style={styles.screen}>
-      <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.navBar}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Go back" style={styles.iconButton} onPress={onBack}><Ionicons name="arrow-back" size={21} color={C.ink} /></Pressable>
-          <Logo compact />
-          <View style={styles.iconButtonGhost} />
-        </View>
-        <ScrollView contentContainerStyle={styles.setupContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <View>
-            <Text style={styles.stepLabel}>{mode === 'create' ? 'NEW OUTING' : 'JOIN THE CREW'}</Text>
-            <Text style={styles.pageTitle}>{mode === 'create' ? 'Where are we\ngoing?' : 'Your kaki are\nwaiting.'}</Text>
-            <Text style={styles.pageSubtitle}>{mode === 'create' ? 'Set the plan. Everyone joins with one simple code.' : 'Enter the six-character code from your group leader.'}</Text>
-          </View>
-
-          <View style={styles.formBlock}>
-            <Text style={styles.inputLabel}>YOUR NAME</Text>
-            <TextInput value={name} onChangeText={setName} placeholder="What should we call you?" placeholderTextColor="#9AA8A1" style={styles.input} autoCapitalize="words" returnKeyType="done" />
-          </View>
-
-          {mode === 'join' ? (
-            <View style={styles.formBlock}>
-              <Text style={styles.inputLabel}>GROUP CODE</Text>
-              <TextInput value={code} onChangeText={(value) => setCode(value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))} placeholder="SG482K" placeholderTextColor="#9AA8A1" style={[styles.input, styles.codeInput]} autoCapitalize="characters" maxLength={6} />
-              <View style={styles.helperRow}><Ionicons name="information-circle-outline" size={16} color={C.inkSoft} /><Text style={styles.helperText}>Ask your group leader for their live code</Text></View>
-            </View>
-          ) : (
-            <>
-              <View style={styles.formBlock}>
-                <Text style={styles.inputLabel}>ACTIVITY</Text>
-                <View style={styles.segment}>
-                  {(['run', 'ride'] as Activity[]).map((item) => (
-                    <Pressable key={item} onPress={() => setActivity(item)} style={[styles.segmentItem, activity === item && styles.segmentItemActive]}>
-                      <Ionicons name={item === 'run' ? 'walk-outline' : 'bicycle-outline'} size={19} color={activity === item ? C.white : C.ink} />
-                      <Text style={[styles.segmentText, activity === item && styles.segmentTextActive]}>{item === 'run' ? 'Group run' : 'Group ride'}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-
-              <View style={styles.formBlock}>
-                <Text style={styles.inputLabel}>DESTINATION</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.destinationRow}>
-                  {DESTINATIONS.map((item) => {
-                    const selected = destination.name === item.name;
-                    return (
-                      <Pressable key={item.name} onPress={() => setDestination(item)} style={[styles.destinationCard, selected && styles.destinationCardActive]}>
-                        <View style={[styles.destinationIcon, selected && styles.destinationIconActive]}><Ionicons name={item.icon} size={21} color={selected ? C.white : C.ink} /></View>
-                        <Text style={styles.destinationName}>{item.name}</Text>
-                        <Text style={styles.destinationMeta}>{item.area} · {item.distance}</Text>
-                        {selected ? <View style={styles.checkCircle}><Ionicons name="checkmark" size={13} color={C.white} /></View> : null}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </>
-          )}
-        </ScrollView>
-        <View style={styles.stickyAction}>
-          {error ? <View style={styles.apiError}><Ionicons name="alert-circle" size={16} color="#A33D2C" /><Text style={styles.apiErrorText}>{error}</Text></View> : null}
-          <PillButton disabled={!valid || busy} label={busy ? 'Connecting…' : mode === 'create' ? 'Create group' : 'Join group'} icon={busy ? undefined : 'arrow-forward'} onPress={async () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); await onContinue({ name: name.trim(), code, activity, destination }); }} />
-        </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
+function Lobby({ group, participantId, busy, error, onStart, onLeave, onChangeDestination, onRemove }: { group: ApiGroup; participantId: string; busy: boolean; error: string; onStart: () => void; onLeave: () => void; onChangeDestination: () => void; onRemove: (id: string) => void }) {
+  const host = group.hostId === participantId;
+  const share = () => Share.share({ message: `Join my Paladin ride to ${group.destination.name}. Group code: ${group.code}` });
+  return <SafeAreaView style={s.screen}><Header title="GROUP LOBBY" onBack={onLeave} /><ScrollView contentContainerStyle={s.content}>
+    <View style={s.codeCard}><Text style={s.codeEyebrow}>SHARE THIS CODE</Text><Text style={s.groupCode}>{group.code}</Text><View style={s.shareRow}><Pressable onPress={async () => { await Clipboard.setStringAsync(group.code); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); }} style={s.smallAction}><Ionicons name="copy-outline" size={18} color={C.ink} /><Text style={s.smallActionText}>Copy Code</Text></Pressable><Pressable onPress={share} style={s.smallAction}><Ionicons name="share-outline" size={18} color={C.ink} /><Text style={s.smallActionText}>Share Invite</Text></Pressable></View></View>
+    <View style={s.planCard}><View style={s.activeIcon}><Ionicons name="flag" size={22} color={C.white} /></View><View style={{ flex: 1 }}><Text style={s.kicker}>DESTINATION</Text><Text style={s.cardTitle}>{group.destination.name}</Text><Text style={s.meta}>{group.destination.address || group.destination.area}</Text></View>{host ? <Pressable onPress={onChangeDestination}><Text style={s.link}>Change</Text></Pressable> : null}</View>
+    <View style={s.sectionHead}><Text style={s.sectionTitle}>RIDERS</Text><View style={s.count}><Text style={s.countText}>{group.members.length}</Text></View></View>
+    <View style={s.list}>{group.members.map((member, index) => { const isHost = member.id === group.hostId; return <View key={member.id} style={[s.memberRow, index < group.members.length - 1 && s.divider]}><Initials member={member} /><View style={{ flex: 1, marginLeft: 12 }}><Text style={s.memberName}>{member.name}{member.id === participantId ? ' (you)' : ''}</Text><Text style={s.meta}>{isHost ? 'Host' : 'Ready to ride'}</Text></View>{host && !isHost ? <Pressable accessibilityLabel={`Remove ${member.name}`} onPress={() => onRemove(member.id)} style={s.remove}><Ionicons name="close" size={18} color={C.red} /></Pressable> : <View style={s.ready}><Ionicons name="checkmark" size={13} color={C.white} /></View>}</View>; })}</View>
+    {group.members.length === 1 ? <Text style={s.emptyHint}>You’re the first one here. Share the code so your friends can join.</Text> : null}{error ? <View style={s.error}><Text style={s.errorText}>{error}</Text></View> : null}
+  </ScrollView><View style={s.sticky}>{host ? <Button disabled={busy} label={busy ? 'Starting ride…' : 'Start Ride'} icon="arrow-forward" onPress={onStart} /> : <View style={s.waiting}><ActivityIndicator color={C.ink} /><Text style={s.waitingText}>Waiting for the host to start…</Text></View>}<Pressable onPress={onLeave}><Text style={s.leaveLink}>{host ? 'Cancel group' : 'Leave group'}</Text></Pressable></View></SafeAreaView>;
 }
 
-function MemberAvatar({ member, size = 44 }: { member: Member; size?: number }) {
-  return <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: member.color }]}><Text style={[styles.avatarText, { fontSize: size * 0.34 }]}>{member.initials}</Text></View>;
-}
-
-function VoiceControl({ enabled, onToggle }: { enabled: boolean; onToggle: (value: boolean) => void }) {
-  return (
-    <View style={[styles.voiceCard, enabled && styles.voiceCardActive]}>
-      <View style={[styles.voiceIcon, enabled && styles.voiceIconActive]}><Ionicons name={enabled ? 'headset' : 'headset-outline'} size={24} color={enabled ? C.white : C.ink} /></View>
-      <View style={styles.voiceCopy}>
-        <View style={styles.voiceTitleRow}><Text style={styles.voiceTitle}>Voice cheers</Text>{enabled ? <View style={styles.liveTag}><View style={styles.liveDot} /><Text style={styles.liveText}>LIVE</Text></View> : null}</View>
-        <Text style={styles.voiceSubtitle}>{enabled ? 'Cheers will play automatically in your earphones.' : 'Hear encouragement without looking at your phone.'}</Text>
-      </View>
-      <Switch value={enabled} onValueChange={onToggle} trackColor={{ false: '#C9D0CB', true: C.ink }} thumbColor={enabled ? C.lime : C.white} />
-    </View>
-  );
-}
-
-function LobbyScreen({ group, participantId, starting, onBack, onStart }: { group: ApiGroup; participantId: string; starting: boolean; onBack: () => void; onStart: (voice: boolean) => Promise<void> }) {
-  const [voice, setVoice] = useState(true);
-  const members: Member[] = group.members.map((member) => ({ ...member, isYou: member.id === participantId }));
-  const { activity, destination, code } = group;
-
-  const toggleVoice = (value: boolean) => {
-    setVoice(value);
-    Haptics.selectionAsync();
-    if (value) Speech.speak('Voice cheers on. Let’s move together!', { language: 'en-SG', rate: 0.95 });
-    else Speech.stop();
-  };
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.navBar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Go back" style={styles.iconButton} onPress={onBack}><Ionicons name="arrow-back" size={21} color={C.ink} /></Pressable>
-        <Text style={styles.navTitle}>GROUP LOBBY</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="More options" style={styles.iconButton}><Ionicons name="ellipsis-horizontal" size={21} color={C.ink} /></Pressable>
-      </View>
-      <ScrollView contentContainerStyle={styles.lobbyContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.codeCard}>
-          <Text style={styles.codeEyebrow}>SHARE THIS CODE</Text>
-          <Text style={styles.groupCode}>{code}</Text>
-          <View style={styles.codeRule} />
-          <View style={styles.codeShareRow}><Text style={styles.codeHint}>Your kaki can join from the home screen</Text><Pressable accessibilityRole="button" accessibilityLabel="Share group code" onPress={() => Share.share({ message: `Join my Paladin ${activity} to ${destination.name}. Use code ${code}.` })} style={styles.shareIcon}><Ionicons name="share-outline" size={20} color={C.ink} /></Pressable></View>
-        </View>
-
-        <View style={styles.planCard}>
-          <View style={styles.planIcon}><Ionicons name={activity === 'run' ? 'walk' : 'bicycle'} size={25} color={C.white} /></View>
-          <View style={styles.planCopy}><Text style={styles.planLabel}>{activity === 'run' ? 'GROUP RUN' : 'GROUP RIDE'} · TODAY</Text><Text style={styles.planTitle}>{destination.name}</Text><Text style={styles.planMeta}>Meet at Marina Bay · {destination.distance}</Text></View>
-          <Ionicons name="chevron-forward" size={20} color={C.inkSoft} />
-        </View>
-
-        <VoiceControl enabled={voice} onToggle={toggleVoice} />
-
-        <View style={styles.sectionTitleRow}><Text style={styles.sectionTitle}>KAKI ON DECK</Text><View style={styles.countBadge}><Text style={styles.countText}>{members.length}</Text></View></View>
-        <View style={styles.memberList}>
-          {members.map((member, index) => (
-            <View key={member.id} style={[styles.memberRow, index < members.length - 1 && styles.memberRowBorder]}>
-              <MemberAvatar member={member} />
-              <View style={styles.memberCopy}><Text style={styles.memberName}>{member.name}{member.isYou ? ' (you)' : ''}</Text><Text style={styles.memberStatus}>{member.isYou ? 'Group leader' : 'Ready to move'}</Text></View>
-              <View style={styles.readyDot}><Ionicons name="checkmark" size={13} color={C.white} /></View>
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-      <View style={styles.stickyAction}>
-        <PillButton disabled={starting} label={starting ? 'Starting…' : `Start ${activity}`} icon={starting ? undefined : 'arrow-forward'} onPress={async () => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); await onStart(voice); }} />
-        <Text style={styles.actionFinePrint}>Location is shared only while this outing is active.</Text>
-      </View>
-    </SafeAreaView>
-  );
-}
-
-function ActiveScreen({ group, participantId, initialVoice, onEnd }: { group: ApiGroup; participantId: string; initialVoice: boolean; onEnd: () => void }) {
-  const [voice, setVoice] = useState(initialVoice);
-  const me = group.members.find((member) => member.id === participantId);
-  const [location, setLocation] = useState<Coordinate>({ latitude: me?.latitude ?? 1.2903, longitude: me?.longitude ?? 103.852 });
-  const [locationNote, setLocationNote] = useState('Finding your location…');
-  const [seconds, setSeconds] = useState(0);
-  const [distance, setDistance] = useState(0);
-  const [cheerOpen, setCheerOpen] = useState(false);
-  const [toast, setToast] = useState<{ sender: string; text: string } | null>(null);
-  const fade = useRef(new Animated.Value(0)).current;
-  const mapRef = useRef<MapView>(null);
-  const previousLocation = useRef(location);
-  const seenCheers = useRef(new Set(group.cheers.map((cheer) => cheer.id)));
-  const { activity, destination, code } = group;
-  const members = useMemo<Member[]>(() => group.members.map((member) => member.id === participantId
-    ? { ...member, ...location, isYou: true }
-    : member), [group.members, participantId, location]);
-
-  const route = useMemo(() => [...members.map(({ latitude, longitude }) => ({ latitude, longitude })), { latitude: destination.latitude, longitude: destination.longitude }], [members, destination]);
-
+function ActiveRide({ group, participantId, profile, online, reconnecting, onLeave, onEnd, onStats }: { group: ApiGroup; participantId: string; profile: Profile; online: boolean; reconnecting: boolean; onLeave: () => void; onEnd: (distance: number) => void; onStats: (distance: number, maxSpeed: number) => void }) {
+  const [now, setNow] = useState(Date.now()); const [voice, setVoice] = useState(profile.voiceEnabled); const [cheerOpen, setCheerOpen] = useState(false); const [toast, setToast] = useState(''); const [locationError, setLocationError] = useState(''); const [distance, setDistance] = useState(0); const [maxSpeed, setMaxSpeed] = useState(0); const [currentSpeed, setCurrentSpeed] = useState(0); const [follow, setFollow] = useState(true); const [fitKey, setFitKey] = useState(0);
+  const seen = useRef(new Set(group.cheers.map((item) => item.id))); const queue = useRef<{ sender: string; message: string }[]>([]); const speaking = useRef(false); const previousPoint = useRef<{ latitude: number; longitude: number; timestamp: number } | null>(null);
+  const host = group.hostId === participantId; const elapsed = elapsedSeconds(group.startedAt, now); const avg = elapsed ? distance / (elapsed / 3600) : 0;
+  const mappable = group.members.filter((m): m is ApiMember & { latitude: number; longitude: number } => m.latitude != null && m.longitude != null);
+  const playNext = () => { const next = queue.current.shift(); if (!next) { speaking.current = false; return; } speaking.current = true; setToast(`${next.sender}: ${next.message}`); if (voice) Speech.speak(`${next.sender} says ${next.message}`, { language: 'en-SG', onDone: playNext, onStopped: playNext, onError: playNext }); else setTimeout(playNext, 1800); };
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { storage.rideStats(group.code).then((stats) => { setDistance(stats.distanceKm); setMaxSpeed(stats.maxSpeedKmh); }); }, [group.code]);
+  useEffect(() => { const timer = setInterval(async () => { const stats = await storage.rideStats(group.code); setDistance(stats.distanceKm); setMaxSpeed(stats.maxSpeedKmh); onStats(stats.distanceKm, stats.maxSpeedKmh); }, 3000); return () => clearInterval(timer); }, [group.code]);
   useEffect(() => {
-    if (route.length < 2) return;
-    mapRef.current?.fitToCoordinates(route, { animated: true, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } });
-  }, [group.members.length, destination.latitude, destination.longitude]);
-
-  useEffect(() => {
-    let watcher: Location.LocationSubscription | undefined;
-    (async () => {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') {
-        setLocationNote('Demo location · allow access for live tracking');
-        return;
-      }
-      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coordinate = { latitude: current.coords.latitude, longitude: current.coords.longitude };
-      previousLocation.current = coordinate;
-      setLocation(coordinate);
-      groupApi.updateLocation(code, participantId, coordinate, livePace(current.coords.speed, activity)).catch(() => setLocationNote('Location is live locally · reconnecting to group'));
-      setLocationNote('Live location · visible to this group');
-      watcher = await Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, distanceInterval: 10, timeInterval: 5000 }, (update) => {
-        const next = { latitude: update.coords.latitude, longitude: update.coords.longitude };
-        const travelled = distanceKmBetween(previousLocation.current, next);
-        if (travelled < 0.25) setDistance((value) => value + travelled);
-        previousLocation.current = next;
-        setLocation(next);
-        groupApi.updateLocation(code, participantId, next, livePace(update.coords.speed, activity)).catch(() => setLocationNote('Location is live locally · reconnecting to group'));
-      });
-    })();
-    return () => watcher?.remove();
-  }, [activity, code, participantId]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSeconds((value) => value + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [activity]);
-
-  useEffect(() => {
-    for (const cheer of group.cheers) {
-      if (seenCheers.current.has(cheer.id)) continue;
-      seenCheers.current.add(cheer.id);
-      if (cheer.senderId !== participantId) receiveCheer(cheer.senderName, cheer.message);
-    }
-  }, [group.cheers, participantId]);
-
+    let watcher: Location.LocationSubscription | undefined; let demoTimer: ReturnType<typeof setInterval> | undefined; let cancelled = false;
+    (async () => { if (__DEV__ && profile.demoMode) { setLocationError(''); setToast('Development demo location active'); let step = 0; demoTimer = setInterval(async () => { step += 1; const latitude = 1.2903 + Math.sin(step / 5) * 0.003; const longitude = 103.852 + step * 0.00025; const speed = 22; const stats = await storage.rideStats(group.code); const nextStats = { ...stats, distanceKm: stats.distanceKm + 0.025, maxSpeedKmh: Math.max(stats.maxSpeedKmh, speed), lastCoordinate: { latitude, longitude, timestamp: Date.now() } }; await storage.saveRideStats(nextStats); setDistance(nextStats.distanceKm); setCurrentSpeed(speed); setMaxSpeed(nextStats.maxSpeedKmh); await groupApi.updateLocation(group.code, participantId, { latitude, longitude, accuracy: 5 }, `${speed.toFixed(1)} km/h`, speed / 3.6).catch(() => undefined); }, 2500); return; } const permission = await Location.getForegroundPermissionsAsync(); if (permission.status !== 'granted') { setLocationError('Location access is required so riders can see you.'); return; }
+      setLocationError(''); const backgroundOwnsStats = await startBackgroundTracking().catch(() => false);
+      watcher = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 8, timeInterval: 4000 }, async (update) => { if (cancelled) return; const speed = Math.max(0, Math.min(75, (update.coords.speed || 0) * 3.6)); const point = { latitude: update.coords.latitude, longitude: update.coords.longitude, timestamp: update.timestamp }; const stats = await storage.rideStats(group.code); const moved = !backgroundOwnsStats && previousPoint.current ? acceptedMovement(previousPoint.current, point, update.coords.accuracy) : 0; previousPoint.current = point; const nextStats = { ...stats, distanceKm: stats.distanceKm + moved, maxSpeedKmh: Math.max(stats.maxSpeedKmh, speed), lastCoordinate: point }; await storage.saveRideStats(nextStats); setDistance(nextStats.distanceKm); setCurrentSpeed(speed); setMaxSpeed(nextStats.maxSpeedKmh); await groupApi.updateLocation(group.code, participantId, { latitude: update.coords.latitude, longitude: update.coords.longitude, accuracy: update.coords.accuracy }, `${speed.toFixed(1)} km/h`, update.coords.speed || 0).catch(() => undefined); });
+    })(); return () => { cancelled = true; if (demoTimer) clearInterval(demoTimer); watcher?.remove(); };
+  }, [group.code, participantId, profile.demoMode]);
+  useEffect(() => { for (const cheer of group.cheers) if (!seen.current.has(cheer.id)) { seen.current.add(cheer.id); if (cheer.senderId !== participantId) queue.current.push({ sender: cheer.senderName, message: cheer.message }); } if (!speaking.current && queue.current.length) playNext(); }, [group.cheers, participantId, voice]);
   useEffect(() => () => { Speech.stop(); }, []);
-
-  const receiveCheer = (sender: string, text: string) => {
-    setToast({ sender, text });
-    fade.setValue(0);
-    Animated.sequence([
-      Animated.timing(fade, { toValue: 1, duration: 260, useNativeDriver: true }),
-      Animated.delay(4200),
-      Animated.timing(fade, { toValue: 0, duration: 260, useNativeDriver: true }),
-    ]).start(() => setToast(null));
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    if (voice) Speech.speak(`${sender} says: ${text}`, { language: 'en-SG', rate: 0.96, pitch: 1.02 });
-  };
-
-  const sendCheer = async (text: string) => {
-    setCheerOpen(false);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    try {
-      await groupApi.cheer(code, participantId, text);
-      setToast({ sender: 'Sent to everyone', text });
-      fade.setValue(1);
-      Animated.sequence([Animated.delay(2200), Animated.timing(fade, { toValue: 0, duration: 250, useNativeDriver: true })]).start(() => setToast(null));
-    } catch {
-      setToast({ sender: 'Cheer not sent', text: 'Check your connection and try again.' });
-      fade.setValue(1);
-    }
-  };
-
-  const minutes = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const secs = (seconds % 60).toString().padStart(2, '0');
-  const averageSpeed = seconds > 0 ? distance / (seconds / 3600) : 0;
-  const averagePaceSeconds = distance > 0.02 ? seconds / distance : 0;
-  const averagePace = averagePaceSeconds
-    ? `${Math.floor(averagePaceSeconds / 60)}:${Math.round(averagePaceSeconds % 60).toString().padStart(2, '0')}`
-    : '--:--';
-
-  return (
-    <View style={styles.activeFill}>
-      <StatusBar style="dark" />
-      <MapView ref={mapRef} style={StyleSheet.absoluteFill} initialRegion={SG_REGION} showsCompass={false} showsPointsOfInterests={false} toolbarEnabled={false} onMapReady={() => mapRef.current?.fitToCoordinates(route, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}>
-        <Polyline coordinates={route} strokeColor={C.orange} strokeWidth={5} lineDashPattern={[2, 1]} />
-        <Marker coordinate={{ latitude: destination.latitude, longitude: destination.longitude }} title={destination.name}>
-          <View style={styles.destinationMarker}><Ionicons name="flag" size={18} color={C.ink} /></View>
-        </Marker>
-        {members.map((member) => (
-          <Marker key={member.id} coordinate={{ latitude: member.latitude, longitude: member.longitude }} title={member.name} description={member.isYou ? 'You' : `${member.pace} pace`}>
-            <View style={[styles.mapAvatarRing, member.isYou && styles.mapAvatarRingYou]}><MemberAvatar member={member} size={38} /></View>
-          </Marker>
-        ))}
-      </MapView>
-
-      <SafeAreaView style={styles.activeOverlay} pointerEvents="box-none">
-        <View style={styles.activeHeader}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Leave outing" style={styles.mapRoundButton} onPress={onEnd}><Ionicons name="close" size={22} color={C.ink} /></Pressable>
-          <View style={styles.activeCode}><View style={styles.liveDotOrange} /><Text style={styles.activeCodeText}>{code} · LIVE</Text></View>
-          <Pressable accessibilityRole="button" accessibilityLabel="Voice settings" style={[styles.mapRoundButton, voice && styles.mapRoundButtonActive]} onPress={() => { setVoice((value) => !value); if (voice) Speech.stop(); }}><Ionicons name={voice ? 'headset' : 'headset-outline'} size={21} color={voice ? C.white : C.ink} /></Pressable>
-        </View>
-
-        {toast ? (
-          <Animated.View style={[styles.cheerToast, { opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }] }]}>
-            <View style={styles.cheerToastIcon}><Ionicons name="volume-high" size={19} color={C.ink} /></View>
-            <View style={styles.cheerToastCopy}><Text style={styles.cheerToastSender}>{toast.sender}</Text><Text style={styles.cheerToastText}>{toast.text}</Text></View>
-          </Animated.View>
-        ) : null}
-
-        <View style={styles.activeBottom}>
-          <View style={styles.destinationStrip}>
-            <View style={styles.flagCircle}><Ionicons name="flag" size={17} color={C.white} /></View>
-            <View style={styles.destinationStripCopy}><Text style={styles.destinationStripLabel}>DESTINATION</Text><Text style={styles.destinationStripTitle}>{destination.name}</Text></View>
-            <Text style={styles.remainingDistance}>{Math.max(0.1, Number(destination.distance.split(' ')[0]) - distance).toFixed(1)} <Text style={styles.km}>km</Text></Text>
-          </View>
-          <View style={styles.statCard}>
-            <View style={styles.statsRow}>
-              <View style={styles.stat}><Text style={styles.statLabel}>TIME</Text><Text style={styles.statValue}>{minutes}:{secs}</Text></View>
-              <View style={styles.statRule} />
-              <View style={styles.stat}><Text style={styles.statLabel}>DISTANCE</Text><Text style={styles.statValue}>{distance.toFixed(2)} <Text style={styles.statUnit}>km</Text></Text></View>
-              <View style={styles.statRule} />
-              <View style={styles.stat}><Text style={styles.statLabel}>{activity === 'run' ? 'PACE' : 'SPEED'}</Text><Text style={styles.statValue}>{activity === 'run' ? averagePace : averageSpeed.toFixed(1)} <Text style={styles.statUnit}>{activity === 'run' ? '/km' : 'km/h'}</Text></Text></View>
-            </View>
-            <View style={styles.locationLine}><View style={styles.liveDot} /><Text style={styles.locationText}>{locationNote}</Text></View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Send a voice cheer" onPress={() => setCheerOpen(true)} style={({ pressed }) => [styles.cheerButton, pressed && styles.pressed]}>
-              <Ionicons name="megaphone" size={21} color={C.ink} /><Text style={styles.cheerButtonText}>Cheer your kaki</Text><Ionicons name="chevron-up" size={18} color={C.ink} />
-            </Pressable>
-          </View>
-        </View>
-      </SafeAreaView>
-
-      <Modal visible={cheerOpen} transparent animationType="slide" onRequestClose={() => setCheerOpen(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setCheerOpen(false)} />
-        <SafeAreaView style={styles.cheerSheet}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.sheetHeader}><View><Text style={styles.sheetKicker}>VOICE MODE</Text><Text style={styles.sheetTitle}>Send some energy</Text></View><Pressable style={styles.iconButton} onPress={() => setCheerOpen(false)}><Ionicons name="close" size={21} color={C.ink} /></Pressable></View>
-          <Text style={styles.sheetSubtitle}>Tap a cheer. It’ll play automatically for everyone with voice mode on.</Text>
-          <View style={styles.cheerGrid}>
-            {CHEERS.map((cheer) => (
-              <Pressable key={cheer.text} onPress={() => sendCheer(cheer.text)} style={({ pressed }) => [styles.cheerOption, pressed && styles.cheerOptionPressed]}>
-                <Text style={styles.cheerEmoji}>{cheer.emoji}</Text><Text style={styles.cheerOptionText}>{cheer.text}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </SafeAreaView>
-      </Modal>
-    </View>
-  );
+  const sendCheer = async (message: string) => { setCheerOpen(false); try { await groupApi.cheer(group.code, participantId, message); setToast(`Sent: ${message}`); } catch { setToast('Cheer not sent. Check your connection.'); } };
+  return <View style={s.fill}><StatusBar style="dark" /><GroupMap members={mappable.map((m) => ({ ...m, isYou: m.id === participantId }))} destination={{ ...group.destination, latitude: group.destination.latitude || 1.28, longitude: group.destination.longitude || 103.87 }} follow={follow} fitKey={fitKey} onGesture={() => setFollow(false)} />
+    <SafeAreaView style={s.rideOverlay} pointerEvents="box-none"><View><View style={s.rideHeader}><Pressable accessibilityRole="button" accessibilityLabel={host ? 'End Ride' : 'Leave Ride'} onPress={host ? () => onEnd(distance) : onLeave} style={s.mapButton}><Ionicons name="close" size={22} color={C.ink} /></Pressable><View style={s.liveBadge}><View style={s.liveDot} /><Text style={s.liveText}>{group.code} · LIVE</Text></View><Pressable accessibilityRole="button" accessibilityLabel={voice ? 'Mute voice cheers' : 'Enable voice cheers'} onPress={() => { const next = !voice; setVoice(next); storage.saveProfile({ ...profile, voiceEnabled: next }); if (voice) Speech.stop(); }} style={[s.mapButton, voice && { backgroundColor: C.ink }]}><Ionicons name={voice ? 'headset' : 'headset-outline'} size={21} color={voice ? C.white : C.ink} /></Pressable></View><NetworkPill online={online} connecting={reconnecting} />{toast ? <View style={s.toast}><Ionicons name="volume-high" size={18} color={C.ink} /><Text style={s.toastText}>{toast}</Text><Pressable onPress={() => setToast('')}><Ionicons name="close" size={16} color={C.soft} /></Pressable></View> : null}</View>
+      <View style={s.mapTools}><Pressable onPress={() => setFollow(true)} style={[s.mapTool, follow && s.mapToolActive]}><Ionicons name="locate" size={19} color={C.ink} /><Text style={s.mapToolText}>Recenter</Text></Pressable><Pressable onPress={() => { setFollow(false); setFitKey((key) => key + 1); }} style={s.mapTool}><Ionicons name="people" size={19} color={C.ink} /><Text style={s.mapToolText}>Group</Text></Pressable></View>
+      <View style={s.rideBottom}>{locationError ? <View style={s.permissionCard}><Ionicons name="location-outline" size={22} color={C.red} /><View style={{ flex: 1 }}><Text style={s.memberName}>Location needed</Text><Text style={s.meta}>{locationError}</Text></View><Pressable onPress={async () => { const result = await requestRideLocation(); if (result.foreground.status === 'granted') setLocationError(''); else if (!result.foreground.canAskAgain) Linking.openSettings(); }}><Text style={s.link}>Fix</Text></Pressable></View> : null}
+        <View style={s.destinationStrip}><Ionicons name="flag" size={20} color={C.white} /><View style={{ flex: 1 }}><Text style={s.codeEyebrow}>DESTINATION</Text><Text style={s.destinationStripText}>{group.destination.name}</Text></View><Text style={s.riderCount}>{group.members.length} riders</Text></View>
+        <View style={s.stats}><Stat label="TIME" value={formatDuration(elapsed)} /><Stat label="DISTANCE" value={distanceText(distance, profile.units)} /><Stat label="SPEED" value={speedText(currentSpeed, profile.units)} /><Stat label="AVERAGE" value={speedText(avg, profile.units)} /></View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.riderStrip}>{group.members.map((member) => { const f = freshness(member.lastSeen, now); return <View key={member.id} style={s.riderChip}><View style={[s.statusDot, { backgroundColor: f.state === 'live' ? '#59B87C' : f.state === 'delayed' ? '#E4A83A' : '#9CA7A2' }]} /><Text style={s.riderChipName}>{member.name}</Text><Text style={s.riderChipStatus}>{f.label}</Text></View>; })}</ScrollView>
+        <Button label="Cheer" icon="megaphone" onPress={() => setCheerOpen(true)} />
+      </View></SafeAreaView>
+    <Modal visible={cheerOpen} transparent animationType="slide" onRequestClose={() => setCheerOpen(false)}><Pressable style={s.backdrop} onPress={() => setCheerOpen(false)} /><SafeAreaView style={s.sheet}><View style={s.sheetHandle} /><Text style={s.pageTitle}>Quick cheer</Text><Text style={s.body}>One tap sends a spoken message to the group.</Text><View style={s.cheerGrid}>{CHEERS.map((cheer) => <Pressable key={cheer} onPress={() => sendCheer(cheer)} style={s.cheer}><Ionicons name="volume-high" size={18} color={C.ink} /><Text style={s.cheerText}>{cheer}</Text></Pressable>)}</View></SafeAreaView></Modal>
+  </View>;
 }
+function Stat({ label, value }: { label: string; value: string }) { return <View style={s.stat}><Text style={s.statLabel}>{label}</Text><Text style={s.statValue}>{value}</Text></View>; }
+
+function Summary({ summary, units, onDone }: { summary: RideSummary; units: Profile['units']; onDone: () => void }) { return <SafeAreaView style={s.screen}><ScrollView contentContainerStyle={[s.content, { flexGrow: 1 }]}><View style={s.summaryHero}><View style={s.finishIcon}><Ionicons name="flag" size={34} color={C.ink} /></View><Text style={s.kicker}>RIDE COMPLETE</Text><Text style={s.bigTitle}>Finished together.</Text><Text style={s.body}>{summary.destination.name} · {new Date(summary.endedAt).toLocaleDateString()}</Text></View><View style={s.summaryStats}><Stat label="DURATION" value={formatDuration(summary.durationSeconds)} /><Stat label="DISTANCE" value={distanceText(summary.distanceKm, units)} /><Stat label="AVG SPEED" value={speedText(summary.averageSpeedKmh, units)} /><Stat label="RIDERS" value={String(summary.riders.length)} /></View><Text style={s.sectionTitle}>YOUR KAKI</Text><View style={s.avatarStack}>{summary.riders.map((rider) => <Initials key={rider.id} member={rider as ApiMember} size={50} />)}</View></ScrollView><View style={s.sticky}><Button label="Done" icon="arrow-forward" onPress={onDone} /></View></SafeAreaView>; }
+function SummaryRow({ ride, units, onPress }: { ride: RideSummary; units: Profile['units']; onPress: () => void }) { return <Pressable onPress={onPress} style={s.summaryRow}><View style={s.activeIcon}><Ionicons name="bicycle" size={21} color={C.white} /></View><View style={{ flex: 1 }}><Text style={s.memberName}>{ride.destination.name}</Text><Text style={s.meta}>{new Date(ride.endedAt).toLocaleDateString()} · {distanceText(ride.distanceKm, units, 1)} · {formatDuration(ride.durationSeconds)}</Text></View><Ionicons name="chevron-forward" size={19} color={C.soft} /></Pressable>; }
+function History({ history, units, onBack, onOpen }: { history: RideSummary[]; units: Profile['units']; onBack: () => void; onOpen: (ride: RideSummary) => void }) { return <SafeAreaView style={s.screen}><Header title="RIDE HISTORY" onBack={onBack} /><ScrollView contentContainerStyle={s.content}>{history.map((ride) => <SummaryRow key={ride.code} units={units} ride={ride} onPress={() => onOpen(ride)} />)}</ScrollView></SafeAreaView>; }
+function Settings({ profile, permission, onBack, onSave }: { profile: Profile; permission: string; onBack: () => void; onSave: (profile: Profile) => void }) { const [draft, setDraft] = useState(profile); return <SafeAreaView style={s.screen}><Header title="SETTINGS" onBack={onBack} /><ScrollView contentContainerStyle={s.content}><Field label="DISPLAY NAME"><TextInput value={draft.displayName} onChangeText={(displayName) => setDraft({ ...draft, displayName })} style={s.input} placeholder="Your name" /></Field><Setting label="Voice cheers" detail="Play incoming cheers automatically"><Switch value={draft.voiceEnabled} onValueChange={(voiceEnabled) => setDraft({ ...draft, voiceEnabled })} trackColor={{ true: C.ink }} /></Setting><Setting label="Units" detail={draft.units === 'metric' ? 'Kilometres and km/h' : 'Miles and mph'}><Pressable onPress={() => setDraft({ ...draft, units: draft.units === 'metric' ? 'imperial' : 'metric' })}><Text style={s.link}>{draft.units === 'metric' ? 'Metric' : 'Imperial'}</Text></Pressable></Setting><Setting label="Location permission" detail={permission}><Pressable onPress={() => Linking.openSettings()}><Text style={s.link}>Settings</Text></Pressable></Setting>{__DEV__ ? <Setting label="Demo mode" detail="Development only · simulated location"><Switch value={draft.demoMode} onValueChange={(demoMode) => setDraft({ ...draft, demoMode })} /></Setting> : null}<View style={s.about}><Logo /><Text style={s.meta}>Paladin v1.0 · Built for riding together.</Text></View></ScrollView><View style={s.sticky}><Button label="Save Settings" onPress={() => onSave({ ...draft, displayName: draft.displayName.trim() })} /></View></SafeAreaView>; }
+function Setting({ label, detail, children }: { label: string; detail: string; children: React.ReactNode }) { return <View style={s.setting}><View style={{ flex: 1 }}><Text style={s.memberName}>{label}</Text><Text style={s.meta}>{detail}</Text></View>{children}</View>; }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('home');
-  const [mode, setMode] = useState<Mode>('create');
-  const [name, setName] = useState('');
-  const [activity, setActivity] = useState<Activity>('run');
-  const [destination, setDestination] = useState(DESTINATIONS[0]);
-  const [code, setCode] = useState('');
-  const [voice, setVoice] = useState(true);
-  const [group, setGroup] = useState<ApiGroup | null>(null);
-  const [participantId, setParticipantId] = useState('');
-  const [setupBusy, setSetupBusy] = useState(false);
-  const [setupError, setSetupError] = useState('');
-  const [starting, setStarting] = useState(false);
-
-  const chooseMode = (nextMode: Mode) => { setMode(nextMode); setSetupError(''); setScreen('setup'); };
-  const continueSetup = async (data: { name: string; code: string; activity: Activity; destination: Destination }) => {
-    setSetupBusy(true);
-    setSetupError('');
-    try {
-      const result = mode === 'create'
-        ? await groupApi.create({ name: data.name, activity: data.activity, destination: data.destination })
-        : await groupApi.join(data.code, data.name);
-      setName(data.name);
-      setActivity(result.group.activity);
-      setDestination({ ...result.group.destination, icon: 'flag-outline' });
-      setCode(result.group.code);
-      setGroup(result.group);
-      setParticipantId(result.participantId);
-      setScreen(result.group.status === 'active' ? 'active' : 'lobby');
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Could not reach the group service.';
-      setSetupError(`${detail} Make sure “npm run server” is running and EXPO_PUBLIC_API_URL points to it.`);
-    } finally {
-      setSetupBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!group || !code || (screen !== 'lobby' && screen !== 'active')) return;
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const result = await groupApi.snapshot(code);
-        if (!cancelled) {
-          setGroup(result.group);
-          if (screen === 'lobby' && result.group.status === 'active') setScreen('active');
-        }
-      } catch {
-        // Keep the last known map and retry on the next polling interval.
-      }
-    };
-    const timer = setInterval(refresh, 2000);
-    refresh();
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [code, screen]);
-
-  const startOuting = async (enabled: boolean) => {
-    if (!group) return;
-    setStarting(true);
-    try {
-      const result = await groupApi.start(group.code, participantId);
-      setGroup(result.group);
-      setVoice(enabled);
-      setScreen('active');
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  if (screen === 'home') return <><StatusBar style="dark" /><HomeScreen onChoose={chooseMode} /></>;
-  if (screen === 'setup') return <><StatusBar style="dark" /><SetupScreen mode={mode} busy={setupBusy} error={setupError} onBack={() => setScreen('home')} onContinue={continueSetup} /></>;
-  if (screen === 'lobby' && group) return <><StatusBar style="dark" /><LobbyScreen group={group} participantId={participantId} starting={starting} onBack={() => setScreen('setup')} onStart={startOuting} /></>;
-  if (screen === 'active' && group) return <ActiveScreen group={group} participantId={participantId} initialVoice={voice} onEnd={() => setScreen('lobby')} />;
-  return <><StatusBar style="dark" /><HomeScreen onChoose={chooseMode} /></>;
+  const [screen, setScreen] = useState<Screen>('boot'); const [mode, setMode] = useState<Mode>('create'); const [profile, setProfile] = useState(EMPTY_PROFILE); const [group, setGroup] = useState<ApiGroup | null>(null); const [participantId, setParticipantId] = useState(''); const [history, setHistory] = useState<RideSummary[]>([]); const [summary, setSummary] = useState<RideSummary | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [online, setOnline] = useState(true); const [reconnecting, setReconnecting] = useState(false); const [permission, setPermission] = useState('Not requested'); const distanceRef = useRef(0); const restoreStarted = useRef(false);
+  const finishLocally = async (rideSummary: RideSummary) => { await storage.addHistory(rideSummary); await storage.clearSession(); await storage.clearRideStats(); await stopBackgroundTracking().catch(() => undefined); setHistory(await storage.history()); setGroup(null); setParticipantId(''); setSummary(rideSummary); setScreen('summary'); };
+  const restore = async () => { const [hasOnboarded, savedProfile, savedSession, savedHistory] = await Promise.all([storage.hasOnboarded(), storage.profile(), storage.session(), storage.history()]); setProfile(savedProfile); setHistory(savedHistory); const status = await locationPermissionStatus().catch(() => null); if (status) setPermission(status.foreground.status === 'granted' ? (status.background?.status === 'granted' ? 'Always allowed' : 'While using app') : 'Not allowed');
+    if (!hasOnboarded) return setScreen('onboarding'); if (!savedSession) return setScreen('home'); setReconnecting(true); try { const result = await groupApi.resume(savedSession.code, savedProfile.deviceId); setGroup(result.group); setParticipantId(result.participantId); await storage.saveSession({ code: result.group.code, participantId: result.participantId, group: result.group }); if (result.group.status === 'ended' && result.group.summary) await finishLocally(result.group.summary); else setScreen(result.group.status === 'active' ? 'active' : 'lobby'); } catch { if (savedSession.group && savedSession.group.status !== 'ended') { setGroup(savedSession.group); setParticipantId(savedSession.participantId); setScreen(savedSession.group.status === 'active' ? 'active' : 'lobby'); } else { setScreen('home'); } } finally { setReconnecting(false); } };
+  useEffect(() => { if (!restoreStarted.current) { restoreStarted.current = true; restore(); } const unsubscribe = NetInfo.addEventListener((state) => setOnline(Boolean(state.isConnected && state.isInternetReachable !== false))); return unsubscribe; }, []);
+  const refresh = async () => { if (!group) return; try { if (participantId) await groupApi.heartbeat(group.code, participantId); const result = await groupApi.snapshot(group.code); setGroup(result.group); await storage.saveSession({ code: result.group.code, participantId, group: result.group }); setReconnecting(false); if (result.group.status === 'ended' && result.group.summary) await finishLocally(result.group.summary); else if (result.group.status === 'active' && screen === 'lobby') setScreen('active'); } catch { setReconnecting(true); } };
+  useEffect(() => { const app = AppState.addEventListener('change', (state) => { if (state === 'active' && group) refresh(); }); return () => app.remove(); }, [group?.code, participantId, screen]);
+  useEffect(() => { if (!group || !['lobby', 'active'].includes(screen)) return; const timer = setInterval(refresh, screen === 'active' ? 2500 : 1800); refresh(); return () => clearInterval(timer); }, [group?.code, screen]);
+  const submit = async (data: { name: string; code: string; rideName: string; groupName: string; destination: Destination }) => { if (busy) return; setBusy(true); setError(''); try { const result = mode === 'create' ? await groupApi.create({ name: data.name, deviceId: profile.deviceId, activity: 'ride', rideName: data.rideName, groupName: data.groupName, destination: data.destination }) : await groupApi.join(data.code, data.name, profile.deviceId); const updated = { ...profile, displayName: data.name }; await storage.saveProfile(updated); await storage.saveSession({ code: result.group.code, participantId: result.participantId, group: result.group }); setProfile(updated); setGroup(result.group); setParticipantId(result.participantId); setScreen(result.group.status === 'active' ? 'active' : 'lobby'); } catch (e) { setError(e instanceof ApiError ? e.message : 'Paladin could not complete that action.'); } finally { setBusy(false); } };
+  const start = async () => { if (!group || busy) return; setBusy(true); setError(''); try { const result = await groupApi.start(group.code, participantId); setGroup(result.group); await storage.saveRideStats({ code: group.code, distanceKm: 0, maxSpeedKmh: 0 }); await startBackgroundTracking().catch(() => false); setScreen('active'); } catch (e) { setError(e instanceof Error ? e.message : 'The ride could not start.'); } finally { setBusy(false); } };
+  const leave = () => { if (!group) return; const host = group.hostId === participantId; Alert.alert(host ? 'Cancel this group?' : 'Leave this group?', host ? 'The next rider will become host. If nobody else is here, the group will close.' : 'You will leave the lobby.', [{ text: 'Stay', style: 'cancel' }, { text: host ? 'Cancel / Leave' : 'Leave', style: 'destructive', onPress: async () => { await groupApi.leave(group.code, participantId).catch(() => undefined); await storage.clearSession(); setGroup(null); setScreen('home'); } }]); };
+  const leaveActive = () => { if (!group) return; Alert.alert('Leave this ride?', 'Your location will stop being shared with the group.', [{ text: 'Keep riding', style: 'cancel' }, { text: 'Leave Ride', style: 'destructive', onPress: async () => { await groupApi.leave(group.code, participantId).catch(() => undefined); await stopBackgroundTracking().catch(() => undefined); await storage.clearSession(); setGroup(null); setScreen('home'); } }]); };
+  const end = (distance: number) => { if (!group) return; Alert.alert('End ride for everyone?', 'All riders will stop sharing location and receive the ride summary.', [{ text: 'Keep riding', style: 'cancel' }, { text: 'End Ride', style: 'destructive', onPress: async () => { if (busy) return; setBusy(true); try { const result = await groupApi.end(group.code, participantId, distance); if (result.group.summary) await finishLocally(result.group.summary); } finally { setBusy(false); } } }]); };
+  const remove = (id: string) => { if (!group) return; const member = group.members.find((item) => item.id === id); Alert.alert(`Remove ${member?.name || 'rider'}?`, 'They can rejoin while the ride is still in the lobby.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: async () => { const result = await groupApi.leave(group.code, participantId, id); setGroup(result.group); } }]); };
+  const changeDestination = () => { if (!group) return; const currentIndex = DESTINATIONS.findIndex((item) => item.name === group.destination.name); const next = DESTINATIONS[(currentIndex + 1 + DESTINATIONS.length) % DESTINATIONS.length]; Alert.alert('Change destination?', `Set destination to ${next.name}?`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Change', onPress: async () => { const result = await groupApi.destination(group.code, participantId, next); setGroup(result.group); } }]); };
+  if (screen === 'boot') return <View style={[s.fill, s.center]}><Logo /><ActivityIndicator color={C.ink} style={{ marginTop: 24 }} /><Text style={[s.meta, { marginTop: 10 }]}>Restoring Paladin…</Text></View>;
+  if (screen === 'onboarding') return <Onboarding onDone={async () => { await storage.completeOnboarding(); setScreen('home'); }} />;
+  if (screen === 'home') return <><StatusBar style="dark" /><Home profile={profile} active={group?.status === 'active' ? group : null} history={history} onCreate={() => { setMode('create'); setError(''); setScreen('setup'); }} onJoin={() => { setMode('join'); setError(''); setScreen('setup'); }} onResume={() => setScreen('active')} onSettings={() => setScreen('settings')} onHistory={() => setScreen('history')} onOpenRide={(ride) => { setSummary(ride); setScreen('summary'); }} /></>;
+  if (screen === 'setup') return <Setup mode={mode} profile={profile} busy={busy} error={error} onBack={() => setScreen('home')} onSubmit={submit} />;
+  if (screen === 'lobby' && group) return <Lobby group={group} participantId={participantId} busy={busy} error={error} onStart={start} onLeave={leave} onChangeDestination={changeDestination} onRemove={remove} />;
+  if (screen === 'active' && group) return <ActiveRide group={group} participantId={participantId} profile={profile} online={online} reconnecting={reconnecting} onLeave={leaveActive} onEnd={end} onStats={(distance) => { distanceRef.current = distance; }} />;
+  if (screen === 'summary' && summary) return <Summary summary={summary} units={profile.units} onDone={() => { setSummary(null); setScreen('home'); }} />;
+  if (screen === 'history') return <History history={history} units={profile.units} onBack={() => setScreen('home')} onOpen={(ride) => { setSummary(ride); setScreen('summary'); }} />;
+  if (screen === 'settings') return <Settings profile={profile} permission={permission} onBack={() => setScreen('home')} onSave={async (value) => { await storage.saveProfile(value); setProfile(value); setScreen('home'); }} />;
+  return null;
 }
 
-const styles = StyleSheet.create({
-  fill: { flex: 1 },
-  screen: { flex: 1, backgroundColor: C.cream },
-  activeFill: { flex: 1, backgroundColor: '#DDE7DD' },
-  pressed: { opacity: 0.78, transform: [{ scale: 0.985 }] },
-  buttonDisabled: { opacity: 0.35 },
-  homeWrap: { flex: 1, paddingHorizontal: 24, paddingBottom: 22, justifyContent: 'space-between' },
-  homeTop: { paddingTop: Platform.OS === 'android' ? 24 : 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoMark: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.ink, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-  logoMarkCompact: { width: 31, height: 31, borderRadius: 16 },
-  logoDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.lime, position: 'absolute', top: 9, right: 9 },
-  logoTrail: { width: 25, height: 4, borderRadius: 2, backgroundColor: C.orange, transform: [{ rotate: '-35deg' }], position: 'absolute', bottom: 9, left: 5 },
-  logoText: { color: C.ink, fontSize: 17, fontWeight: '900', letterSpacing: 1.4 },
-  logoTextCompact: { fontSize: 13, letterSpacing: 1.1 },
-  sgBadge: { flexDirection: 'row', gap: 6, alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 11, backgroundColor: 'rgba(255,255,255,0.5)' },
-  sgBadgeText: { fontSize: 9, fontWeight: '800', color: C.ink, letterSpacing: 1 },
-  heroArt: { height: Math.min(250, Dimensions.get('window').height * 0.29), marginTop: 14, position: 'relative', alignSelf: 'stretch' },
-  routeLoopOne: { width: 195, height: 145, borderRadius: 90, borderWidth: 2, borderStyle: 'dashed', borderColor: C.inkSoft, position: 'absolute', top: 35, left: '18%', transform: [{ rotate: '22deg' }] },
-  routeLoopTwo: { width: 145, height: 105, borderRadius: 70, borderWidth: 6, borderColor: C.mint, position: 'absolute', bottom: 15, right: '15%', transform: [{ rotate: '-30deg' }] },
-  runnerDot: { width: 48, height: 48, borderRadius: 24, borderWidth: 4, borderColor: C.paper, alignItems: 'center', justifyContent: 'center', position: 'absolute', shadowColor: C.ink, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
-  runnerInitial: { color: C.white, fontSize: 16, fontWeight: '900' },
-  voiceBubble: { position: 'absolute', top: 52, right: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.lime, borderRadius: 18, borderBottomLeftRadius: 4, paddingHorizontal: 11, paddingVertical: 9, transform: [{ rotate: '4deg' }] },
-  voiceBubbleText: { color: C.ink, fontSize: 12, fontWeight: '800' },
-  heroKicker: { color: C.orange, fontSize: 10, fontWeight: '900', letterSpacing: 1.8, marginBottom: 11 },
-  heroTitle: { color: C.ink, fontSize: 43, lineHeight: 45, fontWeight: '900', letterSpacing: -1.8 },
-  heroAccent: { color: C.orange, fontStyle: 'italic' },
-  heroCopy: { color: C.inkSoft, fontSize: 15, lineHeight: 22, marginTop: 16, maxWidth: 350 },
-  homeActions: { gap: 11, marginTop: 20 },
-  pillButton: { height: 57, borderRadius: 29, backgroundColor: C.orange, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 22, shadowColor: C.orange, shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 3 },
-  pillButtonSecondary: { backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, shadowOpacity: 0 },
-  pillButtonText: { color: C.white, fontSize: 15, fontWeight: '800' },
-  pillButtonTextSecondary: { color: C.ink },
-  navBar: { height: 64, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  navTitle: { color: C.ink, fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
-  iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
-  iconButtonGhost: { width: 42 },
-  setupContent: { paddingHorizontal: 24, paddingTop: 18, paddingBottom: 120 },
-  stepLabel: { color: C.orange, fontSize: 10, fontWeight: '900', letterSpacing: 1.7, marginBottom: 12 },
-  pageTitle: { color: C.ink, fontSize: 41, lineHeight: 42, fontWeight: '900', letterSpacing: -1.5 },
-  pageSubtitle: { color: C.inkSoft, fontSize: 15, lineHeight: 22, marginTop: 14, maxWidth: 340 },
-  formBlock: { marginTop: 30 },
-  inputLabel: { color: C.ink, fontSize: 10, fontWeight: '900', letterSpacing: 1.4, marginBottom: 10 },
-  input: { height: 58, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper, paddingHorizontal: 17, color: C.ink, fontSize: 16, fontWeight: '600' },
-  codeInput: { fontSize: 24, letterSpacing: 8, fontWeight: '900', textAlign: 'center' },
-  helperRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 9 },
-  helperText: { color: C.inkSoft, fontSize: 12 },
-  apiError: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, backgroundColor: '#FCE5DE', borderRadius: 12, padding: 10, marginBottom: 10 },
-  apiErrorText: { flex: 1, color: '#8D3528', fontSize: 11, lineHeight: 15 },
-  segment: { flexDirection: 'row', padding: 4, backgroundColor: '#E7E8E0', borderRadius: 18 },
-  segmentItem: { flex: 1, height: 48, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
-  segmentItemActive: { backgroundColor: C.ink },
-  segmentText: { color: C.ink, fontSize: 14, fontWeight: '700' },
-  segmentTextActive: { color: C.white },
-  destinationRow: { gap: 11, paddingRight: 24 },
-  destinationCard: { width: 180, minHeight: 139, borderRadius: 19, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, padding: 15, position: 'relative' },
-  destinationCardActive: { borderColor: C.orange, borderWidth: 2, padding: 14 },
-  destinationIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: C.mint, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
-  destinationIconActive: { backgroundColor: C.orange },
-  destinationName: { color: C.ink, fontSize: 15, fontWeight: '800' },
-  destinationMeta: { color: C.inkSoft, fontSize: 11, marginTop: 5 },
-  checkCircle: { position: 'absolute', right: 11, top: 11, width: 22, height: 22, borderRadius: 11, backgroundColor: C.orange, alignItems: 'center', justifyContent: 'center' },
-  stickyAction: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 22 : 12, backgroundColor: C.cream, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line },
-  actionFinePrint: { color: C.inkSoft, fontSize: 10, textAlign: 'center', marginTop: 9 },
-  lobbyContent: { paddingHorizontal: 24, paddingTop: 10, paddingBottom: 120 },
-  codeCard: { backgroundColor: C.ink, borderRadius: 25, padding: 22, overflow: 'hidden' },
-  codeEyebrow: { color: C.mint, fontSize: 9, fontWeight: '900', letterSpacing: 1.7, textAlign: 'center' },
-  groupCode: { color: C.white, fontSize: 42, fontWeight: '900', letterSpacing: 8, textAlign: 'center', marginVertical: 14 },
-  codeRule: { height: 1, backgroundColor: '#36534A' },
-  codeShareRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 14 },
-  codeHint: { color: '#B6C6C0', fontSize: 11 },
-  shareIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: C.lime, alignItems: 'center', justifyContent: 'center' },
-  planCard: { marginTop: 15, padding: 15, borderRadius: 20, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, flexDirection: 'row', alignItems: 'center', gap: 13 },
-  planIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: C.orange, alignItems: 'center', justifyContent: 'center' },
-  planCopy: { flex: 1 },
-  planLabel: { color: C.orange, fontSize: 8, fontWeight: '900', letterSpacing: 1.1 },
-  planTitle: { color: C.ink, fontSize: 16, fontWeight: '800', marginTop: 4 },
-  planMeta: { color: C.inkSoft, fontSize: 11, marginTop: 3 },
-  voiceCard: { marginTop: 15, padding: 15, borderRadius: 20, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  voiceCardActive: { backgroundColor: '#E5F3C1', borderColor: '#C2D99A' },
-  voiceIcon: { width: 47, height: 47, borderRadius: 16, backgroundColor: C.mint, alignItems: 'center', justifyContent: 'center' },
-  voiceIconActive: { backgroundColor: C.ink },
-  voiceCopy: { flex: 1 },
-  voiceTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  voiceTitle: { color: C.ink, fontSize: 15, fontWeight: '800' },
-  voiceSubtitle: { color: C.inkSoft, fontSize: 10, lineHeight: 14, marginTop: 4 },
-  liveTag: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.ink, paddingVertical: 3, paddingHorizontal: 6, borderRadius: 8 },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#59D48D' },
-  liveText: { color: C.white, fontSize: 7, fontWeight: '900', letterSpacing: 0.7 },
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 28, marginBottom: 10, gap: 8 },
-  sectionTitle: { color: C.ink, fontSize: 10, fontWeight: '900', letterSpacing: 1.4 },
-  countBadge: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.mint, alignItems: 'center', justifyContent: 'center' },
-  countText: { color: C.ink, fontSize: 10, fontWeight: '900' },
-  memberList: { borderRadius: 20, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, paddingHorizontal: 15 },
-  memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13 },
-  memberRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
-  avatar: { alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: C.white, fontWeight: '900' },
-  memberCopy: { flex: 1, marginLeft: 12 },
-  memberName: { color: C.ink, fontSize: 14, fontWeight: '800' },
-  memberStatus: { color: C.inkSoft, fontSize: 10, marginTop: 3 },
-  readyDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#59B87C', alignItems: 'center', justifyContent: 'center' },
-  activeOverlay: { flex: 1, justifyContent: 'space-between' },
-  activeHeader: { paddingHorizontal: 18, paddingTop: Platform.OS === 'android' ? 20 : 4, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  mapRoundButton: { width: 46, height: 46, borderRadius: 23, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center', shadowColor: C.ink, shadowOpacity: 0.13, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 4 },
-  mapRoundButtonActive: { backgroundColor: C.ink, borderColor: C.ink },
-  activeCode: { backgroundColor: C.paper, borderRadius: 18, paddingVertical: 9, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 6, shadowColor: C.ink, shadowOpacity: 0.11, shadowRadius: 7, elevation: 3 },
-  activeCodeText: { color: C.ink, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
-  liveDotOrange: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.orange },
-  mapAvatarRing: { borderRadius: 24, borderWidth: 3, borderColor: C.paper, shadowColor: C.ink, shadowOpacity: 0.22, shadowRadius: 4, elevation: 5 },
-  mapAvatarRingYou: { borderColor: C.lime, borderWidth: 4 },
-  destinationMarker: { width: 42, height: 42, borderRadius: 14, backgroundColor: C.lime, borderWidth: 3, borderColor: C.paper, alignItems: 'center', justifyContent: 'center' },
-  cheerToast: { position: 'absolute', top: Platform.OS === 'android' ? 88 : 76, left: 22, right: 22, flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, borderRadius: 18, backgroundColor: C.lime, borderWidth: 1, borderColor: '#BED45E', shadowColor: C.ink, shadowOpacity: 0.15, shadowRadius: 10, elevation: 5 },
-  cheerToastIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: C.paper, alignItems: 'center', justifyContent: 'center' },
-  cheerToastCopy: { flex: 1 },
-  cheerToastSender: { color: C.ink, fontSize: 10, fontWeight: '900' },
-  cheerToastText: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 2 },
-  activeBottom: { paddingHorizontal: 15, paddingBottom: Platform.OS === 'android' ? 14 : 2 },
-  destinationStrip: { marginHorizontal: 8, marginBottom: 9, borderRadius: 18, padding: 11, backgroundColor: C.paper, flexDirection: 'row', alignItems: 'center', shadowColor: C.ink, shadowOpacity: 0.12, shadowRadius: 8, elevation: 3 },
-  flagCircle: { width: 38, height: 38, borderRadius: 13, backgroundColor: C.orange, alignItems: 'center', justifyContent: 'center' },
-  destinationStripCopy: { flex: 1, marginLeft: 10 },
-  destinationStripLabel: { color: C.inkSoft, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
-  destinationStripTitle: { color: C.ink, fontSize: 13, fontWeight: '800', marginTop: 2 },
-  remainingDistance: { color: C.ink, fontSize: 18, fontWeight: '900' },
-  km: { fontSize: 10, color: C.inkSoft },
-  statCard: { backgroundColor: C.ink, borderRadius: 27, padding: 17, shadowColor: C.ink, shadowOpacity: 0.25, shadowRadius: 13, elevation: 7 },
-  statsRow: { flexDirection: 'row', alignItems: 'center' },
-  stat: { flex: 1, alignItems: 'center' },
-  statLabel: { color: '#8DA39B', fontSize: 7, fontWeight: '900', letterSpacing: 1.1 },
-  statValue: { color: C.white, fontSize: 20, fontWeight: '800', marginTop: 4 },
-  statUnit: { color: '#8DA39B', fontSize: 8 },
-  statRule: { height: 31, width: 1, backgroundColor: '#3B574E' },
-  locationLine: { marginTop: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  locationText: { color: '#9BB0A8', fontSize: 9 },
-  cheerButton: { marginTop: 13, height: 49, borderRadius: 17, backgroundColor: C.lime, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  cheerButtonText: { flex: 1, color: C.ink, fontSize: 14, fontWeight: '900', textAlign: 'center', marginLeft: 18 },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(24,53,44,0.38)' },
-  cheerSheet: { backgroundColor: C.cream, borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 22, paddingBottom: 14 },
-  sheetHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: '#C9CEC7', alignSelf: 'center', marginTop: 10, marginBottom: 17 },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sheetKicker: { color: C.orange, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
-  sheetTitle: { color: C.ink, fontSize: 26, fontWeight: '900', letterSpacing: -0.7, marginTop: 4 },
-  sheetSubtitle: { color: C.inkSoft, fontSize: 12, lineHeight: 18, marginTop: 9, marginBottom: 16, maxWidth: 330 },
-  cheerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
-  cheerOption: { width: '48.6%', minHeight: 95, borderRadius: 18, padding: 13, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line },
-  cheerOptionPressed: { backgroundColor: C.lime, borderColor: C.lime },
-  cheerEmoji: { fontSize: 22 },
-  cheerOptionText: { color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '700', marginTop: 7 },
+const s = StyleSheet.create({
+  fill: { flex: 1 }, center: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.cream }, screen: { flex: 1, backgroundColor: C.cream }, pressed: { opacity: 0.78, transform: [{ scale: 0.985 }] }, disabled: { opacity: 0.45 },
+  button: { minHeight: 58, borderRadius: 29, backgroundColor: C.orange, paddingHorizontal: 22, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center' }, buttonSecondary: { backgroundColor: C.paper, borderWidth: 1, borderColor: C.line }, buttonDanger: { backgroundColor: C.red }, buttonText: { color: C.white, fontSize: 16, fontWeight: '800' }, buttonTextSecondary: { color: C.ink },
+  header: { minHeight: 66, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, headerTitle: { fontSize: 11, fontWeight: '900', color: C.ink, letterSpacing: 1.5 }, iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  logo: { flexDirection: 'row', alignItems: 'center', gap: 9 }, logoMark: { width: 34, height: 34, borderRadius: 17, backgroundColor: C.ink, overflow: 'hidden' }, logoDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.lime, position: 'absolute', top: 8, right: 8 }, logoTrail: { width: 24, height: 4, borderRadius: 2, backgroundColor: C.orange, position: 'absolute', bottom: 8, left: 4, transform: [{ rotate: '-35deg' }] }, logoText: { color: C.ink, fontWeight: '900', letterSpacing: 1.3, fontSize: 15 },
+  onboarding: { flex: 1, padding: 24, paddingTop: 34, justifyContent: 'space-between' }, onboardHero: { alignItems: 'flex-start' }, onboardIcon: { width: 92, height: 92, borderRadius: 31, backgroundColor: C.lime, alignItems: 'center', justifyContent: 'center', marginBottom: 32 }, kicker: { color: C.orange, fontSize: 10, fontWeight: '900', letterSpacing: 1.6, marginBottom: 9 }, bigTitle: { color: C.ink, fontSize: 42, lineHeight: 44, fontWeight: '900', letterSpacing: -1.5 }, body: { color: C.soft, fontSize: 15, lineHeight: 22, marginTop: 13 }, dots: { flexDirection: 'row', justifyContent: 'center', gap: 7, marginBottom: 20 }, dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.line }, dotActive: { width: 24, backgroundColor: C.orange }, skip: { color: C.soft, fontWeight: '700', textAlign: 'center', padding: 14 },
+  home: { paddingHorizontal: 24, paddingBottom: 30, gap: 28 }, homeHeader: { paddingTop: Platform.OS === 'android' ? 22 : 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, heroTitle: { color: C.ink, fontSize: 44, lineHeight: 46, fontWeight: '900', letterSpacing: -1.8 }, activeCard: { borderRadius: 22, backgroundColor: C.lime, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 13 }, activeIcon: { width: 47, height: 47, borderRadius: 15, backgroundColor: C.orange, alignItems: 'center', justifyContent: 'center' }, cardTitle: { color: C.ink, fontSize: 17, fontWeight: '800' }, meta: { color: C.soft, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }, sectionTitle: { color: C.ink, fontSize: 10, fontWeight: '900', letterSpacing: 1.5 }, link: { color: C.orange, fontSize: 12, fontWeight: '800' }, empty: { backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, borderRadius: 20, alignItems: 'center', padding: 24 }, emptyTitle: { color: C.ink, fontSize: 15, fontWeight: '800', marginTop: 8 },
+  content: { padding: 24, paddingBottom: 125 }, pageTitle: { color: C.ink, fontSize: 36, lineHeight: 39, fontWeight: '900', letterSpacing: -1.2 }, fieldLabel: { color: C.ink, fontSize: 10, fontWeight: '900', letterSpacing: 1.4, marginBottom: 9 }, input: { height: 58, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper, paddingHorizontal: 16, color: C.ink, fontSize: 16, fontWeight: '600' }, codeInput: { textAlign: 'center', letterSpacing: 7, fontSize: 23, fontWeight: '900' }, destination: { width: 180, minHeight: 132, padding: 15, borderRadius: 20, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, gap: 8 }, destinationActive: { backgroundColor: C.ink, borderColor: C.ink }, destinationName: { color: C.ink, fontWeight: '800', fontSize: 15 }, error: { marginTop: 20, padding: 13, borderRadius: 14, backgroundColor: '#FCE5DE', flexDirection: 'row', alignItems: 'center', gap: 9 }, errorText: { flex: 1, color: C.red, fontSize: 12, lineHeight: 17 }, sticky: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 22 : 12, backgroundColor: C.cream, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line },
+  codeCard: { backgroundColor: C.ink, borderRadius: 25, padding: 22 }, codeEyebrow: { color: C.mint, fontSize: 9, fontWeight: '900', letterSpacing: 1.5 }, groupCode: { color: C.white, fontSize: 42, letterSpacing: 8, fontWeight: '900', textAlign: 'center', marginVertical: 16 }, shareRow: { flexDirection: 'row', gap: 10 }, smallAction: { flex: 1, height: 44, borderRadius: 14, backgroundColor: C.lime, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, smallActionText: { color: C.ink, fontSize: 12, fontWeight: '800' }, planCard: { marginTop: 15, padding: 15, borderRadius: 20, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, flexDirection: 'row', alignItems: 'center', gap: 12 }, count: { width: 24, height: 24, borderRadius: 12, backgroundColor: C.mint, alignItems: 'center', justifyContent: 'center' }, countText: { color: C.ink, fontSize: 11, fontWeight: '900' }, list: { borderRadius: 20, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, paddingHorizontal: 15 }, memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13 }, divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }, memberName: { color: C.ink, fontSize: 14, fontWeight: '800' }, avatar: { alignItems: 'center', justifyContent: 'center' }, avatarText: { color: C.white, fontWeight: '900', fontSize: 13 }, ready: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#59B87C', alignItems: 'center', justifyContent: 'center' }, remove: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FCE5DE', alignItems: 'center', justifyContent: 'center' }, emptyHint: { color: C.soft, fontSize: 12, textAlign: 'center', marginTop: 14 }, waiting: { height: 58, borderRadius: 29, backgroundColor: C.mint, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }, waitingText: { color: C.ink, fontWeight: '800' }, leaveLink: { color: C.red, fontWeight: '700', fontSize: 12, textAlign: 'center', paddingTop: 13 },
+  rideOverlay: { flex: 1, justifyContent: 'space-between' }, rideHeader: { paddingHorizontal: 18, paddingTop: Platform.OS === 'android' ? 18 : 6, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, mapButton: { width: 45, height: 45, borderRadius: 23, backgroundColor: C.paper, alignItems: 'center', justifyContent: 'center' }, liveBadge: { backgroundColor: C.ink, borderRadius: 20, paddingHorizontal: 13, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 6 }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.orange }, liveText: { color: C.white, fontWeight: '900', fontSize: 10, letterSpacing: 1 }, networkPill: { alignSelf: 'center', marginTop: 8, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, backgroundColor: C.lime, flexDirection: 'row', alignItems: 'center', gap: 7 }, networkText: { color: C.ink, fontWeight: '800', fontSize: 11 }, toast: { marginHorizontal: 18, marginTop: 8, backgroundColor: C.lime, borderRadius: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, toastText: { flex: 1, color: C.ink, fontSize: 12, fontWeight: '700' }, mapTools: { position: 'absolute', right: 16, top: 130, gap: 8 }, mapTool: { backgroundColor: C.paper, borderRadius: 17, paddingHorizontal: 11, paddingVertical: 9, alignItems: 'center' }, mapToolActive: { backgroundColor: C.lime }, mapToolText: { color: C.ink, fontSize: 8, fontWeight: '800', marginTop: 2 },
+  rideBottom: { paddingHorizontal: 14, paddingBottom: Platform.OS === 'android' ? 16 : 5, gap: 8 }, permissionCard: { backgroundColor: '#FCE5DE', borderRadius: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, destinationStrip: { backgroundColor: C.ink, borderRadius: 18, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, destinationStripText: { color: C.white, fontWeight: '800', fontSize: 14 }, riderCount: { color: C.mint, fontSize: 11, fontWeight: '800' }, stats: { backgroundColor: C.paper, borderRadius: 20, padding: 13, flexDirection: 'row', flexWrap: 'wrap' }, stat: { width: '50%', paddingVertical: 8, paddingHorizontal: 9 }, statLabel: { color: C.soft, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, statValue: { color: C.ink, fontSize: 17, fontWeight: '900', marginTop: 3 }, riderStrip: { gap: 7 }, riderChip: { minWidth: 140, backgroundColor: C.paper, borderRadius: 14, padding: 9 }, statusDot: { width: 7, height: 7, borderRadius: 4, position: 'absolute', right: 9, top: 9 }, riderChipName: { color: C.ink, fontSize: 11, fontWeight: '800' }, riderChipStatus: { color: C.soft, fontSize: 8, marginTop: 2 }, backdrop: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(24,53,44,0.35)' }, sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: C.cream, padding: 24, paddingBottom: 30, borderTopLeftRadius: 28, borderTopRightRadius: 28 }, sheetHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: C.line, alignSelf: 'center', marginBottom: 20 }, cheerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, marginTop: 20 }, cheer: { width: '48%', minHeight: 58, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, borderRadius: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }, cheerText: { flex: 1, color: C.ink, fontSize: 12, fontWeight: '800' },
+  summaryHero: { alignItems: 'center', marginTop: 24, marginBottom: 30 }, finishIcon: { width: 82, height: 82, borderRadius: 28, backgroundColor: C.lime, alignItems: 'center', justifyContent: 'center', marginBottom: 20 }, summaryStats: { backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, borderRadius: 22, flexDirection: 'row', flexWrap: 'wrap', marginBottom: 28 }, avatarStack: { flexDirection: 'row', gap: 8, marginTop: 12 }, summaryRow: { padding: 13, borderRadius: 18, backgroundColor: C.paper, borderWidth: 1, borderColor: C.line, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 9 }, setting: { minHeight: 72, backgroundColor: C.paper, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }, about: { alignItems: 'center', marginTop: 42, gap: 9 },
 });
