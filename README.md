@@ -1,9 +1,15 @@
-# Paladin
+<p align="center">
+  <img src="assets/icon.png" alt="Paladin app icon" width="160" />
+</p>
 
-Paladin keeps cycling groups together on every ride.
+<p align="center">
+  <img src="assets/cycling-hero.png" alt="A group of cyclists riding together at sunset" width="100%" />
+</p>
 
-One shared view shows where everyone is, while quick voice cheers keep the group connected without interrupting the road. Riders can join in seconds, stay aware of one another, and finish each ride with a shared record of the adventure.
+<h1 align="center">Paladin</h1>
 
-## The USP
+<p align="center"><strong>The ride is better when no one gets left behind.</strong></p>
 
-Paladin combines group safety, live ride awareness, and lightweight social connection in one rider-first experience—so no one gets lost, left behind, or out of the loop.
+<p align="center">
+  Paladin is the shared ride companion for cycling groups—keeping every rider connected, aware, and part of the same adventure without taking their attention off the road.
+</p>
