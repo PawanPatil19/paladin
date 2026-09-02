@@ -7,7 +7,7 @@ import { activityCopy, distanceText, primaryMetricText } from '../../domain/acti
 import { GroupMap } from '../../GroupMap';
 import { requestRideLocation, startBackgroundTracking } from '../../locationTracking';
 import { acceptedMovement, elapsedSeconds, formatDuration, freshness } from '../../rideUtils';
-import { activityService, type ApiGroup, type ApiMember, type ApiRoutePlan } from '../../services/activityService';
+import { activityService, type ApiGroup, type ApiMember } from '../../services/activityService';
 import { storage, type Profile } from '../../storage';
 import { Button } from '../../ui/Button';
 import { colors } from '../../ui/theme';
@@ -46,8 +46,6 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
   const [currentSpeed, setCurrentSpeed] = useState(0);
   const [follow, setFollow] = useState(true);
   const [fitKey, setFitKey] = useState(0);
-  const [routePlan, setRoutePlan] = useState<ApiRoutePlan | null>(null);
-  const [routeError, setRouteError] = useState(false);
   const seen = useRef(new Set(group.cheers.map((item) => item.id)));
   const queue = useRef<{ sender: string; message: string }[]>([]);
   const speaking = useRef(false);
@@ -73,14 +71,6 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
   };
 
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
-  useEffect(() => {
-    let current = true;
-    setRouteError(false);
-    activityService.routePlan(group.activity, group.start, group.destination)
-      .then((result) => { if (current) setRoutePlan(result.route); })
-      .catch(() => { if (current) { setRoutePlan(null); setRouteError(true); } });
-    return () => { current = false; };
-  }, [group.activity, group.start.latitude, group.start.longitude, group.destination.latitude, group.destination.longitude]);
   useEffect(() => { storage.rideStats(group.code).then((stats) => { setDistance(stats.distanceKm); setMaxSpeed(stats.maxSpeedKmh); }); }, [group.code]);
   useEffect(() => { const timer = setInterval(async () => { const stats = await storage.rideStats(group.code); setDistance(stats.distanceKm); setMaxSpeed(stats.maxSpeedKmh); onStats(stats.distanceKm, stats.maxSpeedKmh); }, 3000); return () => clearInterval(timer); }, [group.code]);
 
@@ -149,7 +139,6 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
         members={mapMembers}
         start={{ ...group.start, latitude: group.start.latitude ?? 1.304, longitude: group.start.longitude ?? 103.8746 }}
         destination={{ ...group.destination, latitude: group.destination.latitude ?? 1.3018, longitude: group.destination.longitude ?? 103.9127 }}
-        route={routePlan?.points}
         follow={follow}
         fitKey={fitKey}
         onGesture={() => setFollow(false)}
@@ -175,7 +164,6 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
             <Ionicons name="arrow-forward" size={17} color={colors.mint} />
             <View style={styles.routePoint}><Ionicons name="flag" size={16} color={colors.lime} /><View style={styles.flex}><Text style={styles.routeEyebrow}>FINISH</Text><Text style={styles.routeName} numberOfLines={1}>{group.destination.name}</Text></View></View>
           </View>
-          <View style={styles.routeMeta}><Ionicons name={routeError ? 'cloud-offline-outline' : 'map-outline'} size={15} color={colors.soft} /><Text style={styles.routeMetaText}>{routePlan ? `${routePlan.distanceKm.toFixed(1)} km mapped route · about ${Math.max(1, Math.round(routePlan.durationSeconds / 60))} min` : routeError ? 'Route service unavailable · showing direct line' : 'Mapping the best route…'}</Text></View>
           <View style={styles.stats}>
             <Stat label="TIME" value={formatDuration(elapsed)} />
             <Stat label="DISTANCE" value={distanceText(distance, profile.units)} />
@@ -206,7 +194,6 @@ const styles = StyleSheet.create({
   bottomPanel: { marginHorizontal: 10, marginBottom: Platform.OS === 'android' ? 10 : 6, padding: 12, gap: 10, borderRadius: 27, backgroundColor: 'rgba(234,242,238,0.97)', borderWidth: 1, borderColor: 'rgba(18,53,36,0.10)' },
   permissionCard: { backgroundColor: '#FCE5DE', borderRadius: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, link: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   routeStrip: { backgroundColor: colors.ink, borderRadius: 18, paddingHorizontal: 13, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10 }, routePoint: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }, startDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: colors.white, borderWidth: 3, borderColor: colors.accent }, routeEyebrow: { color: colors.mint, fontSize: 7, fontWeight: '900', letterSpacing: 1.2 }, routeName: { color: colors.white, fontWeight: '800', fontSize: 11, marginTop: 2 },
-  routeMeta: { minHeight: 24, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'center', gap: 7 }, routeMetaText: { color: colors.soft, fontSize: 9, fontWeight: '700' },
   stats: { backgroundColor: colors.paper, borderRadius: 20, padding: 8, flexDirection: 'row', flexWrap: 'wrap', borderWidth: 1, borderColor: colors.line }, stat: { width: '50%', minHeight: 53, paddingVertical: 7, paddingHorizontal: 10, justifyContent: 'center' }, statLabel: { color: colors.soft, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, statValue: { color: colors.ink, fontSize: 16, fontWeight: '900', marginTop: 3 },
   riderStrip: { gap: 8, paddingRight: 8 }, riderChip: { minWidth: 134, backgroundColor: colors.paper, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 9, borderWidth: 1, borderColor: colors.line }, statusDot: { width: 7, height: 7, borderRadius: 4, position: 'absolute', right: 10, top: 10 }, memberName: { color: colors.ink, fontSize: 12, fontWeight: '800' }, meta: { color: colors.soft, fontSize: 9, lineHeight: 14, marginTop: 2 },
   backdrop: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(18,53,36,0.35)' }, sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.cream, paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 24 : 32, borderTopLeftRadius: 28, borderTopRightRadius: 28 }, sheetHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: colors.line, alignSelf: 'center', marginBottom: 22 }, sheetTitle: { color: colors.ink, fontSize: 30, fontWeight: '900' }, sheetBody: { color: colors.soft, fontSize: 14, lineHeight: 20, marginTop: 8 }, cheerGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 10, rowGap: 10, marginTop: 22 }, cheer: { flexBasis: '47%', flexGrow: 1, minHeight: 64, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.line, borderRadius: 17, paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, cheerText: { flexShrink: 1, color: colors.ink, fontSize: 13, lineHeight: 18, fontWeight: '800' },

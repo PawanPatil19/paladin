@@ -10,7 +10,6 @@ export type ApiMember = {
 };
 export type ApiCheer = { id: string; senderId: string; senderName: string; message: string; createdAt: string };
 export type ApiPoint = { name: string; area: string; address?: string; distance?: string; latitude: number | null; longitude: number | null };
-export type ApiRoutePlan = { activity: ActivityKind; distanceKm: number; durationSeconds: number; points: ApiCoordinate[]; provider: string; cached: boolean };
 export type ActivitySummary = {
   code: string; rideName: string; activity?: ActivityKind; start?: ApiPoint; destination: ApiPoint; startedAt: string | null; endedAt: string;
   durationSeconds: number; distanceKm: number; averageSpeedKmh: number;
@@ -49,10 +48,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const activityService = {
-  routePlan(activity: ActivityKind, start: ApiPoint, end: ApiPoint) {
-    const query = new URLSearchParams({ activity, startLat: String(start.latitude), startLng: String(start.longitude), endLat: String(end.latitude), endLng: String(end.longitude) });
-    return request<{ route: ApiRoutePlan }>(`/routes?${query}`);
-  },
   create(payload: { name: string; deviceId: string; activity: ActivityKind; groupName?: string; rideName?: string; start: ApiPoint; destination: ApiPoint; coordinate?: ApiCoordinate }) {
     return request<{ group: ApiGroup; participantId: string; resumed?: boolean }>('/groups', { method: 'POST', body: JSON.stringify(payload) });
   },

@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAvoidingView, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ACTIVITY, type ActivityKind } from '../../domain/activity';
-import { DEFAULT_ROUTE, ROUTE_POINTS, routeDistanceKm, routeIsValid, type ActivityRoute, type RoutePoint } from '../../domain/route';
+import { DEFAULT_ROUTE, ROUTE_POINTS, routeIsValid, type ActivityRoute, type RoutePoint } from '../../domain/route';
 import type { Profile } from '../../storage';
-import { activityService, type ApiRoutePlan } from '../../services/activityService';
 import { Button } from '../../ui/Button';
 import { colors } from '../../ui/theme';
 
@@ -57,21 +56,9 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
   const [activityName, setActivityName] = useState('');
   const [groupName, setGroupName] = useState('');
   const [route, setRoute] = useState(DEFAULT_ROUTE);
-  const [routePlan, setRoutePlan] = useState<ApiRoutePlan | null>(null);
   const validRoute = routeIsValid(route);
   const valid = name.trim().length >= 2 && (mode === 'join' ? code.length === 6 : validRoute);
   const copy = ACTIVITY[activity];
-
-  useEffect(() => {
-    if (mode !== 'create' || !validRoute) { setRoutePlan(null); return; }
-    let current = true;
-    const timer = setTimeout(() => {
-      activityService.routePlan(activity, route.start, route.end)
-        .then((result) => { if (current) setRoutePlan(result.route); })
-        .catch(() => { if (current) setRoutePlan(null); });
-    }, 250);
-    return () => { current = false; clearTimeout(timer); };
-  }, [activity, mode, route.end.id, route.start.id, validRoute]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -83,8 +70,8 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
         </View>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={styles.kicker}>{mode === 'create' ? 'PLAN TOGETHER' : 'ENTER YOUR CODE'}</Text>
-          <Text style={styles.pageTitle}>{mode === 'create' ? 'Choose your route.' : 'Your group is waiting.'}</Text>
-          <Text style={styles.body}>{mode === 'create' ? 'Pick running or cycling, then choose where everyone starts and finishes.' : 'Codes are six letters or numbers and are not case-sensitive.'}</Text>
+          <Text style={styles.pageTitle}>{mode === 'create' ? 'Set the meeting points.' : 'Your group is waiting.'}</Text>
+          <Text style={styles.body}>{mode === 'create' ? 'Pick running or cycling, then choose where everyone meets and finishes.' : 'Codes are six letters or numbers and are not case-sensitive.'}</Text>
 
           <View style={styles.field}><Text style={styles.fieldLabel}>DISPLAY NAME</Text><TextInput value={name} onChangeText={setName} placeholder="What should we call you?" placeholderTextColor="#97A59F" style={styles.input} maxLength={24} /></View>
 
@@ -105,7 +92,7 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
               <View style={styles.field}><Text style={styles.fieldLabel}>GROUP NAME · OPTIONAL</Text><TextInput value={groupName} onChangeText={setGroupName} placeholder="East Side Kaki" placeholderTextColor="#97A59F" style={styles.input} maxLength={40} /></View>
               <PointPicker label="START POINT" marker="A" value={route.start} onChange={(start) => setRoute({ ...route, start })} />
               <PointPicker label="END POINT" marker="B" value={route.end} onChange={(end) => setRoute({ ...route, end })} />
-              <View style={[styles.routeSummary, !validRoute && styles.routeSummaryError]}><Ionicons name={validRoute ? 'navigate-outline' : 'alert-circle-outline'} size={21} color={validRoute ? colors.ink : colors.red} /><View style={styles.flex}><Text style={styles.routeSummaryTitle}>{validRoute ? `${route.start.name} → ${route.end.name}` : 'Choose two different points'}</Text>{validRoute ? <Text style={styles.routeSummaryText}>{routePlan ? `${routePlan.distanceKm.toFixed(1)} km on mapped ${activity === 'run' ? 'footpaths' : 'cycling paths'} · about ${Math.max(1, Math.round(routePlan.durationSeconds / 60))} min` : `Finding the best route · ${routeDistanceKm(route).toFixed(1)} km point to point`}</Text> : null}</View></View>
+              <View style={[styles.routeSummary, !validRoute && styles.routeSummaryError]}><Ionicons name={validRoute ? 'people-outline' : 'alert-circle-outline'} size={21} color={validRoute ? colors.ink : colors.red} /><View style={styles.flex}><Text style={styles.routeSummaryTitle}>{validRoute ? `${route.start.name} → ${route.end.name}` : 'Choose two different points'}</Text>{validRoute ? <Text style={styles.routeSummaryText}>These points help everyone meet and finish together.</Text> : null}</View></View>
             </>
           )}
           {error ? <View style={styles.error}><Ionicons name="alert-circle" size={19} color={colors.red} /><Text style={styles.errorText}>{error}</Text></View> : null}

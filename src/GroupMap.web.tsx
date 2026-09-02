@@ -19,7 +19,7 @@ function icon(html: string, className: string, size: [number, number], anchor: [
   return L.divIcon({ html, className, iconSize: size, iconAnchor: anchor });
 }
 
-export function GroupMap({ members, start, destination, route = [], follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; route?: MapPoint[]; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
+export function GroupMap({ members, start, destination, follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const contentRef = useRef<L.LayerGroup | null>(null);
@@ -43,8 +43,6 @@ export function GroupMap({ members, start, destination, route = [], follow = tru
     const content = contentRef.current;
     if (!map || !content) return;
     content.clearLayers();
-    const path = route.length >= 2 ? route : [start, destination];
-    L.polyline(path.map((point) => [point.latitude, point.longitude]), { color: colors.accent, weight: 6, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(content);
     L.marker([start.latitude, start.longitude], { icon: icon('<span>A</span>', 'paladin-route-marker paladin-start-marker', [34, 34], [17, 17]), title: `Start: ${start.name}` }).addTo(content);
     L.marker([destination.latitude, destination.longitude], { icon: icon('<span>⚑</span>', 'paladin-route-marker paladin-end-marker', [38, 38], [19, 19]), title: `Finish: ${destination.name}` }).addTo(content);
     for (const member of members) {
@@ -53,14 +51,14 @@ export function GroupMap({ members, start, destination, route = [], follow = tru
       const memberIcon = icon(`<div class="paladin-member-avatar" style="background:${member.color}">${initials}</div><div class="paladin-member-label">${label}</div>`, member.isYou ? 'paladin-member-marker paladin-member-you' : 'paladin-member-marker', [48, 62], [24, 24]);
       L.marker([member.latitude, member.longitude], { icon: memberIcon, title: member.name }).addTo(content);
     }
-  }, [members, route, start.latitude, start.longitude, start.name, destination.latitude, destination.longitude, destination.name]);
+  }, [members, start.latitude, start.longitude, start.name, destination.latitude, destination.longitude, destination.name]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const path = route.length >= 2 ? route : [start, destination];
-    map.fitBounds(L.latLngBounds(path.map((point) => [point.latitude, point.longitude])), { paddingTopLeft: [70, 100], paddingBottomRight: [90, 330], maxZoom: 16 });
-  }, [fitKey, route, start.latitude, start.longitude, destination.latitude, destination.longitude]);
+    const visiblePoints = [start, destination, ...members];
+    map.fitBounds(L.latLngBounds(visiblePoints.map((point) => [point.latitude, point.longitude])), { paddingTopLeft: [70, 100], paddingBottomRight: [90, 310], maxZoom: 16 });
+  }, [fitKey, start.latitude, start.longitude, destination.latitude, destination.longitude]);
 
   const me = members.find((member) => member.isYou);
   useEffect(() => {

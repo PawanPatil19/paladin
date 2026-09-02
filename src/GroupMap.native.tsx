@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from './ui/theme';
 
@@ -21,8 +21,6 @@ type MapDestination = {
   longitude: number;
 };
 
-type MapPoint = { latitude: number; longitude: number };
-
 const SG_REGION = {
   latitude: 1.2903,
   longitude: 103.8612,
@@ -30,16 +28,25 @@ const SG_REGION = {
   longitudeDelta: 0.033,
 };
 
-export function GroupMap({ members, start, destination, route: plannedRoute = [], follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; route?: MapPoint[]; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
+const MONOCHROME_MAP_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#eeeeec' }] },
+  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#555555' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#f7f7f5' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#c8c8c5' }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#e3e3e0' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#d5d5d2' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#dededb' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#d7dde0' }] },
+];
+
+export function GroupMap({ members, start, destination, follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
   const mapRef = useRef<MapView>(null);
-  const route = useMemo(
-    () => plannedRoute.length >= 2 ? plannedRoute : [{ latitude: start.latitude, longitude: start.longitude }, { latitude: destination.latitude, longitude: destination.longitude }],
-    [plannedRoute, start, destination],
-  );
+  const visiblePoints = [{ latitude: start.latitude, longitude: start.longitude }, { latitude: destination.latitude, longitude: destination.longitude }, ...members.map(({ latitude, longitude }) => ({ latitude, longitude }))];
 
   useEffect(() => {
-    if (route.length < 2) return;
-    mapRef.current?.fitToCoordinates(route, {
+    mapRef.current?.fitToCoordinates(visiblePoints, {
       animated: true,
       edgePadding: { top: 120, right: 60, bottom: 310, left: 60 },
     });
@@ -56,13 +63,13 @@ export function GroupMap({ members, start, destination, route: plannedRoute = []
       ref={mapRef}
       style={StyleSheet.absoluteFill}
       initialRegion={SG_REGION}
+      customMapStyle={MONOCHROME_MAP_STYLE}
       showsCompass={false}
       showsPointsOfInterests={false}
       toolbarEnabled={false}
       onPanDrag={onGesture}
-      onMapReady={() => mapRef.current?.fitToCoordinates(route, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}
+      onMapReady={() => mapRef.current?.fitToCoordinates(visiblePoints, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}
     >
-      <Polyline coordinates={route} strokeColor={colors.accent} strokeWidth={5} />
       <Marker coordinate={{ latitude: start.latitude, longitude: start.longitude }} title={`Start: ${start.name}`}>
         <View style={styles.startMarker}><Text style={styles.startMarkerText}>A</Text></View>
       </Marker>

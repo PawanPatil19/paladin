@@ -1,5 +1,10 @@
 .leaflet-container {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #eceeed;
+}
+
+.leaflet-tile-pane {
+  filter: grayscale(1) saturate(0) contrast(0.82) brightness(1.12);
 }
 
 .leaflet-control-attribution {
