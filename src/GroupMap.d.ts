@@ -15,4 +15,6 @@ type MapDestination = {
   longitude: number;
 };
 
-export function GroupMap(props: { members: MapMember[]; start: MapDestination; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }): React.ReactElement;
+type MapPoint = { latitude: number; longitude: number };
+
+export function GroupMap(props: { members: MapMember[]; start: MapDestination; destination: MapDestination; route?: MapPoint[]; follow?: boolean; fitKey?: number; onGesture?: () => void }): React.ReactElement;

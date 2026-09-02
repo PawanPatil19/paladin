@@ -1,0 +1,73 @@
+.leaflet-container {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.leaflet-control-attribution {
+  font-size: 9px;
+}
+
+.leaflet-bottom .leaflet-control-attribution,
+.leaflet-bottom .leaflet-control-zoom {
+  margin-bottom: 310px;
+}
+
+.paladin-route-marker,
+.paladin-member-marker {
+  background: transparent;
+  border: 0;
+}
+
+.paladin-route-marker span {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  border: 3px solid #f7fbf8;
+  border-radius: 50%;
+  background: #123524;
+  color: #fff;
+  box-shadow: 0 5px 16px rgb(18 53 36 / 24%);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.paladin-end-marker span {
+  border-radius: 13px;
+  background: #c7efcf;
+  color: #123524;
+  font-size: 18px;
+}
+
+.paladin-member-avatar {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  margin: 3px;
+  place-items: center;
+  border: 3px solid #f7fbf8;
+  border-radius: 50%;
+  color: #fff;
+  box-shadow: 0 4px 14px rgb(18 53 36 / 25%);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.paladin-member-you .paladin-member-avatar {
+  outline: 3px solid #c7efcf;
+}
+
+.paladin-member-label {
+  width: max-content;
+  max-width: 100px;
+  margin: 4px 0 0 50%;
+  padding: 3px 6px;
+  transform: translateX(-50%);
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgb(247 251 248 / 95%);
+  color: #123524;
+  font-size: 8px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

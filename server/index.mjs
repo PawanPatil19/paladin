@@ -2,12 +2,14 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { createGroupStore } from './store.mjs';
+import { createRoutingService } from './routing.mjs';
 
 const COLORS = ['#FF6846', '#7CA8F8', '#C889E8', '#F5A45D', '#48A984', '#E16C9A'];
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_MEMBERS = 20;
 const store = createGroupStore();
 const requestWindows = new Map();
+const planRoute = createRoutingService();
 
 function withinRateLimit(key, now = Date.now()) {
   const current = requestWindows.get(key);
@@ -130,6 +132,16 @@ export function createAppServer() {
       const userId = currentUser?.id || '';
       const rateKey = userId || request.socket.remoteAddress || 'local';
       if (!withinRateLimit(rateKey)) return json(response, 429, { code: 'RATE_LIMITED', error: 'Paladin is receiving too many requests. Wait a moment and try again.' });
+
+      if (request.method === 'GET' && url.pathname === '/routes') {
+        const start = { latitude: Number(url.searchParams.get('startLat')), longitude: Number(url.searchParams.get('startLng')) };
+        const end = { latitude: Number(url.searchParams.get('endLat')), longitude: Number(url.searchParams.get('endLng')) };
+        try {
+          return json(response, 200, { route: await planRoute(url.searchParams.get('activity'), start, end) });
+        } catch (error) {
+          return json(response, 502, { code: 'ROUTE_UNAVAILABLE', error: error instanceof Error ? error.message : 'The route is temporarily unavailable.' });
+        }
+      }
 
       if (request.method === 'GET' && url.pathname === '/history') return json(response, 200, { rides: await store.history(userId) });
       if (request.method === 'GET' && url.pathname === '/active') {

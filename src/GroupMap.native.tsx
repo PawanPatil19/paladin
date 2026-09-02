@@ -21,6 +21,8 @@ type MapDestination = {
   longitude: number;
 };
 
+type MapPoint = { latitude: number; longitude: number };
+
 const SG_REGION = {
   latitude: 1.2903,
   longitude: 103.8612,
@@ -28,11 +30,11 @@ const SG_REGION = {
   longitudeDelta: 0.033,
 };
 
-export function GroupMap({ members, start, destination, follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
+export function GroupMap({ members, start, destination, route: plannedRoute = [], follow = true, fitKey = 0, onGesture }: { members: MapMember[]; start: MapDestination; destination: MapDestination; route?: MapPoint[]; follow?: boolean; fitKey?: number; onGesture?: () => void }) {
   const mapRef = useRef<MapView>(null);
   const route = useMemo(
-    () => [{ latitude: start.latitude, longitude: start.longitude }, ...members.map(({ latitude, longitude }) => ({ latitude, longitude })), { latitude: destination.latitude, longitude: destination.longitude }],
-    [members, start, destination],
+    () => plannedRoute.length >= 2 ? plannedRoute : [{ latitude: start.latitude, longitude: start.longitude }, { latitude: destination.latitude, longitude: destination.longitude }],
+    [plannedRoute, start, destination],
   );
 
   useEffect(() => {
@@ -60,7 +62,7 @@ export function GroupMap({ members, start, destination, follow = true, fitKey = 
       onPanDrag={onGesture}
       onMapReady={() => mapRef.current?.fitToCoordinates(route, { animated: false, edgePadding: { top: 120, right: 60, bottom: 310, left: 60 } })}
     >
-      <Polyline coordinates={route} strokeColor={colors.accent} strokeWidth={5} lineDashPattern={[2, 1]} />
+      <Polyline coordinates={route} strokeColor={colors.accent} strokeWidth={5} />
       <Marker coordinate={{ latitude: start.latitude, longitude: start.longitude }} title={`Start: ${start.name}`}>
         <View style={styles.startMarker}><Text style={styles.startMarkerText}>A</Text></View>
       </Marker>
