@@ -38,7 +38,39 @@ If the service is hosted elsewhere or automatic discovery is unavailable, set `E
 - Ride summary, local ride history, profile/settings, metric and imperial units
 - Copy/share invite actions, friendly errors, loading guards, and development-only simulated movement
 
-The included Node service keeps active rides in memory. Before public release it still needs an HTTPS host and durable server-side storage; those deployment concerns are intentionally outside this functional v1 pass.
+Without production credentials the Node service uses an isolated in-memory store for local testing. Production mode requires the durable Supabase configuration below.
+
+## Public-user setup
+
+Paladin now supports Supabase email/password accounts, durable PostgreSQL ride state, cloud profiles/history, authenticated API requests, and password recovery. Local development intentionally falls back to the in-memory store; `NODE_ENV=production` fails to start unless durable credentials exist.
+
+1. Create a Supabase project.
+2. Run `supabase/migrations/202609020001_paladin_public_v1.sql` in the Supabase SQL editor.
+3. In Supabase Authentication URL Configuration, add `paladin://reset-password` as an allowed redirect URL. Keep email confirmation enabled for public accounts.
+4. Copy `.env.example` to `.env` and fill in the app-safe values:
+
+   ```bash
+   EXPO_PUBLIC_API_URL=https://your-api.example.com
+   EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+   EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+   EXPO_PUBLIC_AUTH_REDIRECT_URL=paladin://reset-password
+   ```
+
+5. Configure the API host with server-only values:
+
+   ```bash
+   NODE_ENV=production
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+   SUPABASE_SECRET_KEY=sb_secret_...
+   ALLOWED_ORIGIN=https://your-web-app.example.com
+   ```
+
+6. Deploy the included `Dockerfile` to any HTTPS container host. Its health endpoint is `GET /health`.
+
+Never place `SUPABASE_SECRET_KEY` in an `EXPO_PUBLIC_` variable, mobile build, browser configuration, commit, or client log. The database migration enables RLS and revokes direct `anon` and `authenticated` table access; only the authenticated Paladin API uses the server secret.
+
+For local UI work without public credentials, the server remains available through `npm run server`. The app itself displays a configuration screen until its publishable Supabase variables are present, preventing an accidental device-only public release.
 
 ## Checks
 

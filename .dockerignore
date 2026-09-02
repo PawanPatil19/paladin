@@ -1,0 +1,8 @@
+node_modules
+.git
+.expo
+.env
+.env.*
+!.env.example
+dist
+web-build

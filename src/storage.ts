@@ -37,4 +37,5 @@ export const storage = {
   rideStats: (code: string) => getJson<StoredRideStats>(KEYS.rideStats, { code, distanceKm: 0, maxSpeedKmh: 0 }),
   saveRideStats: (stats: StoredRideStats) => setJson(KEYS.rideStats, stats),
   clearRideStats: () => AsyncStorage.removeItem(KEYS.rideStats),
+  clearAccountData: () => AsyncStorage.multiRemove([KEYS.profile, KEYS.session, KEYS.history, KEYS.rideStats]),
 };

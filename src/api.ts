@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { accessToken } from './auth';
 
 export type ApiCoordinate = { latitude: number; longitude: number; accuracy?: number | null };
 export type ApiMember = {
@@ -30,8 +31,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
+    const token = await accessToken();
     const response = await fetch(`${API_URL}${path}`, {
-      ...options, headers: { 'content-type': 'application/json', ...options?.headers }, signal: controller.signal,
+      ...options, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...options?.headers }, signal: controller.signal,
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new ApiError(body.error || 'Paladin could not complete that action.', body.code, response.status);
@@ -76,6 +78,12 @@ export const groupApi = {
   },
   end(code: string, participantId: string, distanceKm: number) {
     return request<{ group: ApiGroup }>(`/groups/${code}/end`, { method: 'POST', body: JSON.stringify({ participantId, distanceKm }) });
+  },
+  history() { return request<{ rides: RideSummary[] }>('/history'); },
+  active() { return request<{ group: ApiGroup | null; participantId: string | null }>('/active'); },
+  profile() { return request<{ profile: { displayName: string; voiceEnabled: boolean; units: 'metric' | 'imperial' } }>('/me'); },
+  saveProfile(profile: { displayName: string; voiceEnabled: boolean; units: 'metric' | 'imperial' }) {
+    return request<{ profile: typeof profile }>('/me', { method: 'PATCH', body: JSON.stringify(profile) });
   },
 };
 

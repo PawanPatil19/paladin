@@ -1,18 +1,27 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { createGroupStore } from './store.mjs';
 
 const COLORS = ['#FF6846', '#7CA8F8', '#C889E8', '#F5A45D', '#48A984', '#E16C9A'];
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_MEMBERS = 20;
-const groups = new Map();
+const store = createGroupStore();
+const requestWindows = new Map();
+
+function withinRateLimit(key, now = Date.now()) {
+  const current = requestWindows.get(key);
+  if (!current || now - current.startedAt >= 60_000) { requestWindows.set(key, { startedAt: now, count: 1 }); return true; }
+  current.count += 1;
+  return current.count <= 240;
+}
 
 function json(response, status, body) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': '*',
+    'access-control-allow-origin': process.env.ALLOWED_ORIGIN || (process.env.NODE_ENV === 'production' ? 'null' : '*'),
     'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type,authorization',
   });
   response.end(JSON.stringify(body));
 }
@@ -29,18 +38,18 @@ function numeric(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-function makeCode() {
+async function makeCode() {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const code = Array.from({ length: 6 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('');
-    if (!groups.has(code)) return code;
+    if (!(await store.has(code))) return code;
   }
   return randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase();
 }
 
-function makeMember(name, deviceId, index, coordinate = {}) {
+function makeMember(name, deviceId, userId, index, coordinate = {}) {
   const now = new Date().toISOString();
   return {
-    id: randomUUID(), deviceId, name, initials: name.slice(0, 2).toUpperCase(),
+    id: randomUUID(), deviceId, userId, name, initials: name.slice(0, 2).toUpperCase(),
     color: COLORS[index % COLORS.length], pace: 'Ready',
     latitude: numeric(coordinate.latitude, null), longitude: numeric(coordinate.longitude, null),
     accuracy: numeric(coordinate.accuracy, null), speed: 0, joinedAt: now, lastSeen: now, locationUpdatedAt: coordinate.latitude != null ? now : null,
@@ -51,7 +60,7 @@ function publicGroup(group, since = '') {
   return {
     code: group.code, groupName: group.groupName, rideName: group.rideName,
     activity: group.activity, status: group.status, hostId: group.hostId,
-    destination: group.destination, members: [...group.members.values()].map(({ deviceId: _deviceId, ...member }) => member),
+    destination: group.destination, members: [...group.members.values()].map(({ deviceId: _deviceId, userId: _userId, ...member }) => member),
     cheers: group.cheers.filter((cheer) => !since || cheer.createdAt > since).slice(-40),
     createdAt: group.createdAt, startedAt: group.startedAt, endedAt: group.endedAt,
     summary: group.summary, serverTime: new Date().toISOString(),
@@ -67,13 +76,13 @@ async function readBody(request) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function requireMember(group, participantId) {
+function requireMember(group, participantId, userId = '') {
   const member = group.members.get(cleanText(participantId, 64));
-  return member || null;
+  return member && (!userId || member.userId === userId) ? member : null;
 }
 
-function requireHost(group, participantId) {
-  return group.hostId === cleanText(participantId, 64) && group.members.has(group.hostId);
+function requireHost(group, participantId, userId = '') {
+  return group.hostId === cleanText(participantId, 64) && Boolean(requireMember(group, group.hostId, userId));
 }
 
 function routeParts(url) {
@@ -101,7 +110,30 @@ export function createAppServer() {
       const parts = routeParts(url);
 
       if (request.method === 'GET' && url.pathname === '/health') {
-        return json(response, 200, { ok: true, groups: groups.size, time: new Date().toISOString() });
+        return json(response, 200, { ok: true, persistent: store.requiresAuth, time: new Date().toISOString() });
+      }
+
+      const currentUser = await store.authenticate(request.headers.authorization || '');
+      if (store.requiresAuth && !currentUser) return json(response, 401, { code: 'AUTH_REQUIRED', error: 'Sign in to continue with Paladin.' });
+      const userId = currentUser?.id || '';
+      const rateKey = userId || request.socket.remoteAddress || 'local';
+      if (!withinRateLimit(rateKey)) return json(response, 429, { code: 'RATE_LIMITED', error: 'Paladin is receiving too many requests. Wait a moment and try again.' });
+
+      if (request.method === 'GET' && url.pathname === '/history') return json(response, 200, { rides: await store.history(userId) });
+      if (request.method === 'GET' && url.pathname === '/active') {
+        const active = await store.findActiveByIdentity({ userId, deviceId: '' });
+        const member = active ? [...active.members.values()].find((item) => item.userId === userId) : null;
+        return json(response, 200, { group: active ? publicGroup(active) : null, participantId: member?.id || null });
+      }
+      if (request.method === 'GET' && url.pathname === '/me') {
+        const profile = await store.profile(userId);
+        return json(response, 200, { profile: profile || { displayName: cleanText(currentUser?.user_metadata?.display_name, 24), voiceEnabled: true, units: 'metric' } });
+      }
+      if (request.method === 'PATCH' && url.pathname === '/me') {
+        const body = await readBody(request);
+        const profile = { displayName: cleanText(body.displayName, 24), voiceEnabled: body.voiceEnabled !== false, units: body.units === 'imperial' ? 'imperial' : 'metric' };
+        if (profile.displayName.length < 2) return json(response, 400, { code: 'NAME_REQUIRED', error: 'Add your display name first.' });
+        return json(response, 200, { profile: await store.saveProfile(userId, profile) });
       }
 
       if (request.method === 'POST' && url.pathname === '/groups') {
@@ -111,14 +143,14 @@ export function createAppServer() {
         const destinationName = cleanText(body.destination?.name, 60);
         if (name.length < 2) return json(response, 400, { code: 'NAME_REQUIRED', error: 'Add your display name first.' });
         if (!destinationName) return json(response, 400, { code: 'DESTINATION_REQUIRED', error: 'Choose where your group is heading.' });
-        const existing = [...groups.values()].find((candidate) => candidate.status !== 'ended' && [...candidate.members.values()].some((member) => member.deviceId === deviceId));
+        const existing = await store.findActiveByIdentity({ userId, deviceId });
         if (existing) {
-          const member = [...existing.members.values()].find((item) => item.deviceId === deviceId);
+          const member = [...existing.members.values()].find((item) => userId ? item.userId === userId : item.deviceId === deviceId);
           return json(response, 200, { group: publicGroup(existing), participantId: member.id, resumed: true });
         }
 
-        const code = makeCode();
-        const member = makeMember(name, deviceId, 0, body.coordinate);
+        const code = await makeCode();
+        const member = makeMember(name, deviceId, userId, 0, body.coordinate);
         const now = new Date().toISOString();
         const group = {
           code, groupName: cleanText(body.groupName, 40), rideName: cleanText(body.rideName, 50),
@@ -129,16 +161,17 @@ export function createAppServer() {
           },
           members: new Map([[member.id, member]]), cheers: [], createdAt: now, startedAt: null, endedAt: null, summary: null,
         };
-        groups.set(code, group);
+        await store.save(group);
         return json(response, 201, { group: publicGroup(group), participantId: member.id });
       }
 
       if (parts[0] === 'groups' && parts[1]) {
         const code = cleanCode(parts[1]);
-        const group = groups.get(code);
+        const group = await store.get(code);
         if (!group) return json(response, 404, { code: 'GROUP_NOT_FOUND', error: 'That ride could not be found. Check the code and try again.' });
 
         if (request.method === 'GET' && parts.length === 2) {
+          if (store.requiresAuth && ![...group.members.values()].some((member) => member.userId === userId)) return json(response, 403, { code: 'NOT_A_MEMBER', error: 'You are not a member of this ride.' });
           return json(response, 200, { group: publicGroup(group, url.searchParams.get('since') ?? '') });
         }
 
@@ -149,78 +182,90 @@ export function createAppServer() {
           const name = cleanText(body.name, 24);
           const deviceId = cleanText(body.deviceId, 80) || randomUUID();
           if (name.length < 2) return json(response, 400, { code: 'NAME_REQUIRED', error: 'Add your display name first.' });
-          const existing = [...group.members.values()].find((member) => member.deviceId === deviceId);
+          const otherActive = await store.findActiveByIdentity({ userId, deviceId });
+          if (otherActive && otherActive.code !== group.code) return json(response, 409, { code: 'ACTIVE_RIDE_EXISTS', error: 'You already belong to another active ride. Leave or finish it before joining this one.' });
+          const existing = [...group.members.values()].find((member) => userId ? member.userId === userId : member.deviceId === deviceId);
           if (existing) {
-            existing.name = name; existing.initials = name.slice(0, 2).toUpperCase(); existing.lastSeen = new Date().toISOString();
+            existing.deviceId = deviceId; existing.name = name; existing.initials = name.slice(0, 2).toUpperCase(); existing.lastSeen = new Date().toISOString();
+            await store.save(group);
             return json(response, 200, { group: publicGroup(group), participantId: existing.id, resumed: true });
           }
           if ([...group.members.values()].some((member) => member.name.toLowerCase() === name.toLowerCase())) {
             return json(response, 409, { code: 'NAME_IN_USE', error: 'That display name is already in this ride. Add an initial so riders can tell you apart.' });
           }
           if (group.members.size >= MAX_MEMBERS) return json(response, 409, { code: 'GROUP_FULL', error: 'This ride group is full.' });
-          const member = makeMember(name, deviceId, group.members.size, body.coordinate);
+          const member = makeMember(name, deviceId, userId, group.members.size, body.coordinate);
           group.members.set(member.id, member);
+          await store.save(group);
           return json(response, 201, { group: publicGroup(group), participantId: member.id });
         }
 
         if (request.method === 'POST' && parts[2] === 'resume') {
           const body = await readBody(request);
           const deviceId = cleanText(body.deviceId, 80);
-          const member = [...group.members.values()].find((item) => item.deviceId === deviceId);
+          const member = [...group.members.values()].find((item) => userId ? item.userId === userId : item.deviceId === deviceId);
           if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your previous membership is no longer active.' });
+          member.deviceId = deviceId;
           member.lastSeen = new Date().toISOString();
+          await store.save(group);
           return json(response, 200, { group: publicGroup(group), participantId: member.id });
         }
 
         if (request.method === 'POST' && parts[2] === 'start') {
           const body = await readBody(request);
-          if (!requireHost(group, body.participantId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the ride host can start the ride.' });
+          if (!requireHost(group, body.participantId, userId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the ride host can start the ride.' });
           if (group.status === 'ended') return json(response, 409, { code: 'RIDE_FINISHED', error: 'This ride has already finished.' });
           group.status = 'active';
           group.startedAt ??= new Date().toISOString();
+          await store.save(group);
           return json(response, 200, { group: publicGroup(group) });
         }
 
         if (request.method === 'PATCH' && parts[2] === 'destination') {
           const body = await readBody(request);
-          if (!requireHost(group, body.participantId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the ride host can change the destination.' });
+          if (!requireHost(group, body.participantId, userId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the ride host can change the destination.' });
           if (group.status !== 'lobby') return json(response, 409, { code: 'RIDE_STARTED', error: 'The destination is locked after the ride starts.' });
           const name = cleanText(body.destination?.name, 60);
           if (!name) return json(response, 400, { code: 'DESTINATION_REQUIRED', error: 'Choose where your group is heading.' });
           group.destination = { ...group.destination, ...body.destination, name };
+          await store.save(group);
           return json(response, 200, { group: publicGroup(group) });
         }
 
         if (request.method === 'PATCH' && parts[2] === 'participants' && parts[3]) {
           const participantId = cleanText(parts[3], 64);
-          const member = group.members.get(participantId);
+          const member = requireMember(group, participantId, userId);
           if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your ride membership could not be found.' });
           const body = await readBody(request);
           member.latitude = numeric(body.latitude, member.latitude); member.longitude = numeric(body.longitude, member.longitude);
           member.accuracy = numeric(body.accuracy, member.accuracy); member.speed = Math.max(0, Math.min(25, numeric(body.speed, member.speed)));
           member.pace = cleanText(body.pace, 20) || member.pace; member.lastSeen = new Date().toISOString();
           member.locationUpdatedAt = member.lastSeen;
-          return json(response, 200, { member: { ...member, deviceId: undefined } });
+          await store.patchMember(group.code, member);
+          const { deviceId: _deviceId, userId: _userId, ...publicMember } = member;
+          return json(response, 200, { member: publicMember });
         }
 
         if (request.method === 'POST' && parts[2] === 'heartbeat') {
           const body = await readBody(request);
-          const member = requireMember(group, body.participantId);
+          const member = requireMember(group, body.participantId, userId);
           if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your ride membership could not be found.' });
           member.lastSeen = new Date().toISOString();
+          await store.patchMember(group.code, member);
           return json(response, 200, { ok: true, serverTime: member.lastSeen });
         }
 
         if (request.method === 'POST' && parts[2] === 'cheers') {
           const body = await readBody(request);
           if (group.status !== 'active') return json(response, 409, { code: 'RIDE_NOT_ACTIVE', error: 'Cheers are available while the ride is active.' });
-          const sender = requireMember(group, body.senderId);
+          const sender = requireMember(group, body.senderId, userId);
           if (!sender) return json(response, 403, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Rejoin the ride to send a cheer.' });
           const message = cleanText(body.message, 100);
           if (!message) return json(response, 400, { code: 'CHEER_REQUIRED', error: 'Choose a cheer first.' });
           const cheer = { id: randomUUID(), senderId: sender.id, senderName: sender.name, message, createdAt: new Date().toISOString() };
           group.cheers.push(cheer);
           if (group.cheers.length > 100) group.cheers.splice(0, group.cheers.length - 100);
+          await store.appendCheer(group.code, cheer);
           return json(response, 201, { cheer });
         }
 
@@ -228,7 +273,7 @@ export function createAppServer() {
           const body = await readBody(request);
           const targetId = cleanText(parts[3], 64);
           const actorId = cleanText(body.participantId, 64);
-          if (actorId !== targetId && !requireHost(group, actorId)) return json(response, 403, { code: 'NOT_ALLOWED', error: 'You cannot remove this rider.' });
+          if (!requireMember(group, actorId, userId) || (actorId !== targetId && !requireHost(group, actorId, userId))) return json(response, 403, { code: 'NOT_ALLOWED', error: 'You cannot remove this rider.' });
           if (!group.members.has(targetId)) return json(response, 200, { group: publicGroup(group) });
           group.members.delete(targetId);
           if (group.members.size === 0) {
@@ -236,15 +281,21 @@ export function createAppServer() {
           } else if (group.hostId === targetId) {
             group.hostId = [...group.members.values()].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0].id;
           }
+          await store.save(group);
           return json(response, 200, { group: publicGroup(group) });
         }
 
         if (request.method === 'POST' && parts[2] === 'end') {
           const body = await readBody(request);
-          if (!requireHost(group, body.participantId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the ride host can end the ride.' });
+          if (!requireHost(group, body.participantId, userId)) return json(response, 403, { code: 'HOST_ONLY', error: 'Only the ride host can end the ride.' });
           if (group.status !== 'ended') {
             group.status = 'ended'; group.summary = buildSummary(group, body); group.endedAt = group.summary.endedAt;
+            group.cheers = [];
+            for (const member of group.members.values()) {
+              member.latitude = null; member.longitude = null; member.accuracy = null; member.speed = 0; member.pace = 'Finished';
+            }
           }
+          await store.save(group);
           return json(response, 200, { group: publicGroup(group) });
         }
       }
@@ -257,7 +308,7 @@ export function createAppServer() {
   });
 }
 
-export function resetGroupsForTests() { groups.clear(); }
+export function resetGroupsForTests() { requestWindows.clear(); return store.reset(); }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT || 8787);
