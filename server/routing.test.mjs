@@ -26,4 +26,3 @@ test('routing service rejects coordinates outside Singapore before fetching', as
   const route = createRoutingService({ fetcher: async () => assert.fail('fetch should not run') });
   await assert.rejects(() => route('ride', { latitude: 51.5, longitude: -0.1 }, { latitude: 1.31, longitude: 103.88 }), /within Singapore/);
 });
-
