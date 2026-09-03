@@ -36,12 +36,30 @@ _Avoid_: Team, room
 An authenticated Paladin user who belongs to a **Group**.
 _Avoid_: Member, rider, runner
 
+**Presence**:
+The temporary activity-scoped state a **Participant** shares with a **Group**, including **Visibility**, location freshness, and **Circle Check**.
+_Avoid_: Tracking record
+
+**Visibility**:
+A **Participant**'s per-**Activity** choice to be hidden, approximately located, or precisely located. It is never inherited as permanent public presence.
+_Avoid_: Privacy setting
+
+**Circle Check**:
+A one-tap, structured status during an **Activity**: all good, ease up, taking a break, or need help.
+_Avoid_: Message, post
+
+**Kaki Connection**:
+A private relationship created only when two **Participants** from a completed **Activity** both choose to move together again.
+_Avoid_: Follow, friend request
+
 ## Relationships
 
 - An **Activity** has exactly one **Route**.
 - A **Route** has exactly one **Start Point** and one **End Point**.
 - A **Group** coordinates exactly one **Activity**.
 - A **Group** contains one or more **Participants**.
+- A **Participant** controls one temporary **Presence** for each **Activity**.
+- A **Kaki Connection** requires two matching private intentions from the same completed **Activity**.
 
 ## Example dialogue
 

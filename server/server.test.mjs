@@ -202,3 +202,23 @@ test('Kaki Again reveals a connection only after mutual intent', async () => {
   assert.equal(mutual.body.matched, true);
   assert.equal(mutual.body.group.connections.length, 1);
 });
+
+test('blocking hides a participant and prevents Kaki Again matching', async () => {
+  const created = await call('/groups', { method: 'POST', body: JSON.stringify({ name: 'Ari', deviceId: 'block-a', activity: 'run', destination: { name: 'Marina Barrage' } }) });
+  const joined = await call(`/groups/${created.body.group.code}/join`, { method: 'POST', body: JSON.stringify({ name: 'Mei', deviceId: 'block-b' }) });
+  await call(`/groups/${created.body.group.code}/start`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId }) });
+  await call(`/groups/${created.body.group.code}/end`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, distanceKm: 3 }) });
+  const blocked = await call(`/groups/${created.body.group.code}/safety`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, targetId: joined.body.participantId, action: 'block' }) });
+  assert.equal(blocked.status, 200);
+  assert.deepEqual(blocked.body.group.members.map((member) => member.id), [created.body.participantId]);
+  const connect = await call(`/groups/${created.body.group.code}/connect`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, targetId: joined.body.participantId }) });
+  assert.equal(connect.status, 403);
+  assert.equal(connect.body.code, 'CONNECTION_BLOCKED');
+});
+
+test('summary distance is bounded to a plausible product limit', async () => {
+  const created = await call('/groups', { method: 'POST', body: JSON.stringify({ name: 'Ari', deviceId: 'distance-a', activity: 'run', destination: { name: 'Marina Barrage' } }) });
+  await call(`/groups/${created.body.group.code}/start`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId }) });
+  const ended = await call(`/groups/${created.body.group.code}/end`, { method: 'POST', body: JSON.stringify({ participantId: created.body.participantId, distanceKm: 1e300 }) });
+  assert.equal(ended.body.group.summary.distanceKm, 200);
+});

@@ -138,7 +138,7 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
   useEffect(() => {
     for (const cheer of group.cheers) if (!seen.current.has(cheer.id)) {
       seen.current.add(cheer.id);
-      if (cheer.senderId !== participantId) queue.current.push({ sender: cheer.senderName, message: cheer.message });
+      if (cheer.senderId !== participantId) queue.current = [...queue.current.slice(-5), { sender: cheer.senderName, message: cheer.message }];
     }
     if (!speaking.current && queue.current.length) playNext();
   }, [group.cheers, participantId, voice]);
@@ -154,6 +154,7 @@ export function LiveActivityScreen({ group, participantId, profile, online, reco
     setPresenceOpen(false);
     setConsentNeeded(false);
     setSharing(visibility);
+    if (visibility === 'paused') setCurrentSpeed(0);
     await storage.setSharingEnabled(visibility !== 'paused');
     if (visibility === 'paused') await stopSharingLocally();
     try { await activityService.presence(group.code, participantId, { visibility }); setToast(visibility === 'paused' ? 'Location paused' : visibility === 'precise' ? `Precise location shared with ${audience} ${audience === 1 ? 'person' : 'people'}` : `Approximate location shared with ${audience} ${audience === 1 ? 'person' : 'people'}`); }

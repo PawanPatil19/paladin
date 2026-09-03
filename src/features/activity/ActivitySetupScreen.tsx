@@ -95,7 +95,7 @@ export function ActivitySetupScreen({ mode, profile, busy, error, onBack, onSubm
           )}
           {error ? <View style={styles.error}><Ionicons name="alert-circle" size={19} color={colors.red} /><Text style={styles.errorText}>{error}</Text></View> : null}
         </ScrollView>
-        <View style={styles.sticky}><Button disabled={!valid || busy} label={busy ? (mode === 'create' ? 'Creating…' : 'Joining…') : mode === 'create' ? `Create ${copy.label} Group` : 'Preview & Join'} icon="arrow-forward" onPress={() => onSubmit({ name: name.trim(), code, activity, activityName: activityName.trim(), groupName: groupName.trim(), route })} /></View>
+        <View style={styles.sticky}><Button disabled={!valid || busy} label={busy ? (mode === 'create' ? 'Creating…' : 'Joining…') : mode === 'create' ? `Create ${copy.label} Group` : 'Join Activity'} icon="arrow-forward" onPress={() => onSubmit({ name: name.trim(), code, activity, activityName: activityName.trim(), groupName: groupName.trim(), route })} /></View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

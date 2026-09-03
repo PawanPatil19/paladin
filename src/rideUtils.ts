@@ -23,7 +23,9 @@ export function elapsedSeconds(startedAt: string | null, now = Date.now()) {
 }
 
 export function freshness(lastSeen: string, now = Date.now()) {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(lastSeen)) / 1000));
+  const parsed = Date.parse(lastSeen);
+  if (!Number.isFinite(parsed)) return { state: 'offline' as const, label: 'No location shared' };
+  const seconds = Math.max(0, Math.floor((now - parsed) / 1000));
   if (seconds < 20) return { state: 'live' as const, label: 'Live · updated now' };
   if (seconds < 90) return { state: 'delayed' as const, label: `Delayed · ${seconds}s ago` };
   const minutes = Math.max(2, Math.round(seconds / 60));

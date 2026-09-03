@@ -78,9 +78,9 @@ function publicGroup(group, since = '', viewerId = '') {
     start: group.start || cleanPoint({ name: 'Current location' }), destination: group.destination,
     members: visibleMembers.map((member) => publicMember(member)),
     cheers: group.cheers.filter((cheer) => (!viewerId || !isBlocked(group, viewerId, cheer.senderId)) && (!since || cheer.createdAt > since)).slice(-40),
-    connections: group.connections || [],
+    connections: (group.connections || []).filter((key) => !viewerId || key.split(':').includes(viewerId)),
     createdAt: group.createdAt, startedAt: group.startedAt, endedAt: group.endedAt,
-    summary: group.summary, serverTime: new Date().toISOString(),
+    summary: group.summary ? { ...group.summary, connections: (group.summary.connections || []).filter((key) => !viewerId || key.split(':').includes(viewerId)) } : null, serverTime: new Date().toISOString(),
   };
 }
 
@@ -228,9 +228,9 @@ export function createAppServer() {
         if (request.method === 'POST' && parts[2] === 'resume') {
           const body = await readBody(request);
           const deviceId = cleanText(body.deviceId, 80);
+          if ((group.bannedIdentities || []).includes(userId ? `user:${userId}` : `device:${deviceId}`)) return json(response, 403, { code: 'REMOVED_FROM_GROUP', error: 'The host removed you from this activity.' });
           const member = [...group.members.values()].find((item) => userId ? item.userId === userId : item.deviceId === deviceId);
           if (!member) return json(response, 404, { code: 'MEMBERSHIP_NOT_FOUND', error: 'Your previous membership is no longer active.' });
-          if ((group.bannedIdentities || []).includes(identityKey(member))) return json(response, 403, { code: 'REMOVED_FROM_GROUP', error: 'The host removed you from this activity.' });
           member.deviceId = deviceId;
           member.lastSeen = new Date().toISOString();
           await store.save(group);
